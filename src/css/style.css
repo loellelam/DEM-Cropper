@@ -1,0 +1,233 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  font-family: 'Poppins', sans-serif;
+}
+
+h1 {
+  text-align: center;
+}
+
+hr {
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+button {
+  appearance: none;
+  background-color: #FAFBFC;
+  border: 1px solid rgba(27, 31, 35, 0.15);
+  border-radius: 6px;
+  box-shadow: rgba(27, 31, 35, 0.04) 0 1px 0, rgba(255, 255, 255, 0.25) 0 1px 0 inset;
+  box-sizing: border-box;
+  color: #24292E;
+  cursor: pointer;
+  display: inline-block;
+  font-family: -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  list-style: none;
+  padding: 6px 16px;
+  position: relative;
+  transition: background-color 0.2s cubic-bezier(0.3, 0, 0.5, 1);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  vertical-align: middle;
+  white-space: nowrap;
+  word-wrap: break-word;
+}
+
+button:hover {
+  background-color: #F3F4F6;
+  text-decoration: none;
+  transition-duration: 0.1s;
+}
+
+#container {
+  display: flex;
+  height: 100vh;
+}
+
+.sidePanel {
+  width: 25%;
+  background-color: #f4f4f4;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* Accordion styles */
+.accordion {
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.accordion-item {
+  border-bottom: 1px solid #ccc;
+}
+
+.accordion-header {
+  background-color: #f4f4f4;
+  padding: 10px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.accordion-header:hover {
+  background-color: #ddd;
+}
+
+.accordion-content {
+  display: none;
+  padding: 10px;
+  background-color: #fff;
+}
+
+.accordion-content.active {
+  display: block;
+}
+/* Accordian styles end */
+
+.mainContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.tabs {
+  display: flex;
+  background-color: #ddd;
+  /* border-bottom: 1px solid #ccc; */
+}
+
+.tab {
+  flex: 1;
+  text-align: center;
+  padding: 10px;
+  cursor: pointer;
+  background-color: #f4f4f4;
+  border-right: 1px solid #ccc;
+}
+
+.tab.active {
+  /* background-color: #fff; */
+  background-color: #007bff;
+  color: white;
+  font-weight: bold;
+  border-bottom: 3px solid #0056b3;
+  font-size: 1.1em;
+}
+
+.view {
+  flex: 1;
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background-color: #FAFBFC;
+  color: #24292E;
+  appearance: none;
+  border: 1px solid rgba(27, 31, 35, 0.15);
+  border-radius: 6px;
+  box-shadow: rgba(27, 31, 35, 0.04) 0 1px 0, rgba(255, 255, 255, 0.25) 0 1px 0 inset;
+  box-sizing: border-box;
+  cursor: pointer;
+  font-family: -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  list-style: none;
+  padding: 6px 16px;
+  position: relative;
+  transition: background-color 0.2s cubic-bezier(0.3, 0, 0.5, 1);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  vertical-align: middle;
+  white-space: nowrap;
+  word-wrap: break-word;
+}
+
+.icon-button:hover {
+  background-color: #F3F4F6;
+  text-decoration: none;
+  transition-duration: 0.1s;
+}
+
+#map {
+  width: 100%;
+  height: 100%;
+}
+
+#map.crosshair-cursor {
+  cursor: crosshair;
+}
+
+#dem {
+  width: 100%;
+  height: 100%;
+}
+
+/* Style for the selected button (active draw tool) */
+.accordion-content button.selected {
+  background-color: #007bff;
+  color: white;
+  /* border: 2px solid #0056b3; */
+}
+
+.historyDiv {
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.geojsonHistoryDiv {
+  border: solid 1px #ccc;
+  border-radius: 5px;
+  padding: 5px;
+  cursor: pointer;
+}
+
+.historyDivItem {
+  display: flex;
+  background-color: #f0f0f0;
+  border-radius: 5px;
+  margin-bottom: 5px;
+  padding: 5px;
+  cursor: pointer;
+}
+.historyDivItem:hover {
+  background-color: #e0e0e0;
+}
+
+.historyDivItemClicked {
+  background-color: #007bff;
+  color: white;
+}
+.historyDivItemClicked:hover {
+  background-color: #0056b3;
+  color: white;
+}
+
+.geojsonSubmenu {
+  margin-left: 10px;
+}
+
+.historyButton {
+  line-height: 12px;
+  padding: 4px 13px;
+}
+
+.floatRight {
+  margin-left: auto;
+}
