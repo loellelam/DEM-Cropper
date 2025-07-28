@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DEM Cropper</title>
+
+    <!-- leaflet cdn link -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    
+    <!-- Font Awesome CSS icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+
+    <script type="module" crossorigin src="/DEM-Cropper/assets/index-wC1qasIX.js"></script>
+    <link rel="stylesheet" crossorigin href="/DEM-Cropper/assets/index-4Vwr-dfk.css">
+  </head>
+  <body>
+    <div id="container">
+      <!-- Main Content -->
+      <div class="mainContent">
+        <!-- Tabs -->
+        <div class="tabs">
+          <div class="tab active" data-view="mapView">Map</div>
+          <div class="tab" data-view="demView">3D Model</div>
+        </div>
+
+        <!-- Views -->
+        <div id="mapView" class="view active">
+          <div id="map"></div>
+        </div>
+        <div id="demView" class="view">
+          <div id="dem"></div>
+        </div>
+      </div>
+
+      <!-- Side Panel -->
+      <div class="sidePanel">
+        <h1>DEM Cropper</h1>
+        <p>Upload a GeoTIFF and crop it to a polygon or rectangle. Then, export the cropped DEM as an STL.</p>
+
+        <br />
+
+        <!-- Accordion Menu -->
+        <div class="accordion">
+          <!-- Step 1 -->
+          <div class="accordion-item">
+            <div class="accordion-header" id="step1">Step 1: GeoTIFF</div>
+            <div class="accordion-content active">
+              <label for="tiffUpload" class="icon-button">
+                <i class="fas fa-file-upload"></i> Upload GeoTIFF
+              </label>
+              <input type="file" id="tiffUpload" accept=".tif,.tiff" style="display: none;" />
+              
+              <br /><br />
+              <p>Upload History:</p>
+              <div id="geotiffHistory" class="historyDiv"></div>
+            </div>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="accordion-item">
+            <div class="accordion-header" id="step2">Step 2: Crop</div>
+            <div class="accordion-content">
+              <p>Draw the shape you want to print using these tools.</p>
+              <button id="rectangleTool" title="Rectangle">
+                <i class="fas fa-vector-square"></i>
+              </button>
+              <button id="polygonTool" title="Polygon">
+                <i class="fas fa-draw-polygon"></i>
+              </button>
+              <button id="circleTool" title="Circle">
+                <i class="far fa-circle"></i>
+              </button>
+              <p>History:</p>
+              <div id="drawHistory" class="historyDiv"></div>
+              
+              <br />
+              <p>Alternatively, upload a GeoJSON.</p>
+              <label for="geojsonUpload" class="icon-button">
+                <i class="fas fa-file-upload"></i> Upload GeoJSON
+              </label>
+              <input id="geojsonUpload" type="file" accept=".geojson" style="display: none;"/>
+              <p>Upload History:</p>
+              <div id="geojsonHistory" class="historyDiv"></div>
+            </div>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="accordion-item">
+            <div class="accordion-header">Step 3: 3D Model</div>
+            <div class="accordion-content">
+              <p>3D Model Controls:</p>
+              <p>Left-click to rotate. Scroll to zoom. Arrow keys to pan.</p>
+
+              <br />
+              <!-- <label for="resolutionInput">Resolution:</label>
+              <input type="number" id="resolutionInput" value="1" min="1" max="10" />
+              <br /> -->
+              <label for="verticalExaggerationInput">Vertical Exaggeration:</label>
+              <input type="number" id="verticalExaggerationInput" value="1" min="0.0001" max="10" step="0.0001" />
+              <span>x</span>
+              <br />
+              <label for="baseThicknessInput">Base Thickness:</label>
+              <input type="number" id="baseThicknessInput" value="0.5" min="0.01" max="5" step="0.01" />
+              <span>mm</span>
+
+              <br /><br />
+              <label>
+                Model Size:
+                <span style="position:relative; cursor:pointer;">
+                  <i class="fas fa-info-circle" style="color:#888;"
+                    onmouseover="this.nextElementSibling.style.display='block'" 
+                    onmouseout="this.nextElementSibling.style.display='none'">
+                  </i>
+                  <span class="tooltip">
+                    Model size is set as width by height. Changing one updates the other, preserving the DEM's aspect ratio.
+                  </span>
+                </span>
+                <input type="number" id="modelWidthInput" value="100.00" style="width:70px; margin-left:8px;" />
+                <span>by</span>
+                <input type="number" id="modelHeightInput" value="100.00" style="width:70px;" />
+                <span>mm</span>
+              </label>
+
+              <br /><br />
+              <label for="bedWidthInput">Bed Width:</label>
+              <input type="number" id="bedWidthInput" value="100" min="0" step="1" style="width:70px;" />
+              <span>mm</span>
+              <br />
+              <label for="bedHeightInput">Bed Height:</label>
+              <input type="number" id="bedHeightInput" value="100" min="0" step="1" style="width:70px;" />
+              <span>mm</span>
+
+              <br /><br />
+              <button id="regenerateButton">Regenerate 3D Model</button>
+
+              <!-- Render mask on canvas -->
+              <!-- <canvas id="maskCanvas" style="border: 1px solid black;"></canvas>
+              <button id="renderMaskButton">Render Mask</button> -->
+            </div>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="accordion-item">
+            <div class="accordion-header">Step 4: Export</div>
+            <div class="accordion-content">
+              <!-- <p>Allow user to define 3D printer settings here.</p> -->
+              <button id="exportButton">
+                <i class="fa-solid fa-file-export"></i>
+                Export 3D Model
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- load georaster libraries to process geotiffs -->
+    <script src="https://unpkg.com/georaster"></script>
+    <script src="https://unpkg.com/georaster-layer-for-leaflet/dist/georaster-layer-for-leaflet.min.js"></script>
+    <script src="https://unpkg.com/geoblaze"></script>
+    <!-- <script src='//api.tiles.mapbox.com/mapbox.js/plugins/leaflet-omnivore/v0.3.1/leaflet-omnivore.min.js'></script> -->
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-kml@1.0.1/L.KML.min.js"></script>
+
+    <!-- Entry js file -->
+  </body>
+</html>
