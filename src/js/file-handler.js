@@ -19,6 +19,8 @@ export function fileHandler() {
         const arrayBuffer = e.target.result;
 
         parseGeoraster(arrayBuffer).then((georaster) => {
+          // Store the filename on the georaster object for later use
+          georaster.filename = file.name;
           // Get statistical data of geotiff
           const stats = geoblaze.stats(georaster);
           const minElevation = 0;
