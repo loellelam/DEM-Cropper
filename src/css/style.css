@@ -225,9 +225,25 @@ button:hover {
 
 .historyButton {
   line-height: 12px;
-  padding: 4px 13px;
+  margin-left: 5px;
+  padding: 4px 6px;
 }
 
 .floatRight {
   margin-left: auto;
+}
+
+.tooltip {
+  display: none;
+  position: absolute;
+  bottom: 110%;
+  left: -6em;;
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 0.95em;
+  width: 260px;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }

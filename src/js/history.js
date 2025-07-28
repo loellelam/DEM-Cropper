@@ -11,15 +11,51 @@ export function addTiffToHistory(layer, name, divContainer) {
   const tiffEntry = document.createElement("div");
   tiffEntry.classList.add("historyDivItem");
   tiffEntry.title = "Click to select this TIFF layer";
-  tiffEntry.onclick = () => {
-    selectTiff(layer, tiffEntry); // Select the layer that was clicked
-  }
-  selectTiff(layer, tiffEntry); // Select the most recently uploaded tiff layer
 
   const tiffText = document.createElement("span");
   tiffText.textContent = name;
 
+  tiffEntry.onclick = () => {
+    selectTiff(layer, tiffEntry, tiffText.textContent); // Select the layer that was clicked
+  }
+  selectTiff(layer, tiffEntry, tiffText.textContent); // Select the most recently uploaded tiff layer
+
+  // Visibility toggle button
+  const eyeButton = document.createElement("button");
+  eyeButton.classList.add("historyButton");
+  eyeButton.classList.add("floatRight");
+  eyeButton.innerHTML = '<i class="fas fa-eye"></i>';
+  eyeButton.title = "Toggle visibility";
+  let tiffVisible = true;
+  eyeButton.onclick = (e) => {
+    e.stopPropagation();
+    if (tiffVisible) {
+      map.removeLayer(layer);
+      eyeButton.innerHTML = '<i class="fas fa-eye-slash"></i>';
+      tiffVisible = false;
+    } else {
+      map.addLayer(layer);
+      eyeButton.innerHTML = '<i class="fas fa-eye"></i>';
+      tiffVisible = true;
+    }
+  };
+
+  // Add Rename button for TIFF
+  const renameButton = document.createElement("button");
+  renameButton.classList.add("historyButton");
+  renameButton.innerHTML = '<i class="fa-solid fa-keyboard"></i>';
+  renameButton.title = "Rename";
+  renameButton.onclick = (e) => {
+    e.stopPropagation();
+    const newName = prompt("Enter new name for the TIFF:", tiffText.textContent);
+    if (newName && newName.trim() !== "") {
+      tiffText.textContent = newName.trim();
+    }
+  };
+
   tiffEntry.appendChild(tiffText);
+  tiffEntry.appendChild(eyeButton);
+  tiffEntry.appendChild(renameButton);
   document.getElementById(divContainer).appendChild(tiffEntry);
 }
 
@@ -31,9 +67,6 @@ export function addShapeToHistory(layer, name, divContainer) {
   const shapeEntry = document.createElement("div");
   shapeEntry.classList.add("historyDivItem");
   shapeEntry.title = "Click to select this shape";
-  shapeEntry.onclick = () => {
-    selectShape(layer, shapeEntry); // Select the shape that was clicked
-  };
 
   const shapeName = document.createElement("span");
   if (name == "Rectangle") {
@@ -49,15 +82,52 @@ export function addShapeToHistory(layer, name, divContainer) {
     shapeName.textContent = name + customCount++;
   }
 
+  shapeEntry.onclick = () => { // Function must appear after shapeName
+    selectShape(layer, shapeEntry, shapeName.textContent); // Select the shape that was clicked
+  };
+  selectShape(layer, shapeEntry, shapeName.textContent); // Select the most recently drawn shape
+
+  // Visibility toggle button
+  const eyeButton = document.createElement("button");
+  eyeButton.classList.add("historyButton");
+  eyeButton.classList.add("floatRight");
+  eyeButton.innerHTML = '<i class="fas fa-eye"></i>';
+  eyeButton.title = "Toggle visibility";
+  let shapeVisible = true;
+  eyeButton.onclick = (e) => {
+    e.stopPropagation();
+    if (shapeVisible) {
+      map.removeLayer(layer);
+      eyeButton.innerHTML = '<i class="fas fa-eye-slash"></i>';
+      shapeVisible = false;
+    } else {
+      map.addLayer(layer);
+      eyeButton.innerHTML = '<i class="fas fa-eye"></i>';
+      shapeVisible = true;
+    }
+  };
+
   const demButton = document.createElement("button");
   demButton.classList.add("historyButton");
-  demButton.classList.add("floatRight");
   demButton.innerHTML = '<i class="fas fa-hammer"></i>';
   demButton.title = "Build 3D Model";
   demButton.onclick = (e) => {
     e.stopPropagation();
     selectShape(layer, shapeEntry); // Select the shape that was clicked
     generateDEM();
+  };
+
+  // Rename button
+  const renameButton = document.createElement("button");
+  renameButton.classList.add("historyButton");
+  renameButton.innerHTML = '<i class="fa-solid fa-keyboard"></i>';
+  renameButton.title = "Rename";
+  renameButton.onclick = (e) => {
+    e.stopPropagation();
+    const newName = prompt("Enter new name for the shape:", shapeName.textContent);
+    if (newName && newName.trim() !== "") {
+      shapeName.textContent = newName.trim();
+    }
   };
 
   const removeButton = document.createElement("button");
@@ -70,12 +140,14 @@ export function addShapeToHistory(layer, name, divContainer) {
   };
 
   shapeEntry.appendChild(shapeName);
+  shapeEntry.appendChild(eyeButton); // Add the eye button to the shape entry
   shapeEntry.appendChild(demButton);
+  shapeEntry.appendChild(renameButton);
   shapeEntry.appendChild(removeButton);
   document.getElementById(divContainer).appendChild(shapeEntry);
 }
 
-function selectTiff(layer, tiffEntry) {
+function selectTiff(layer, tiffEntry, tiffName) {
   switchToTab("mapView");
   map.fitBounds(layer.getBounds());
 
@@ -86,9 +158,14 @@ function selectTiff(layer, tiffEntry) {
   }
   setPrevTiffEntry(tiffEntry);
   tiffEntry.classList.toggle("historyDivItemClicked");
+
+  // Update accordion header with the TIFF's name
+  if (tiffName) {
+    document.getElementById('step1').innerHTML = `Step 1: GeoTIFF - ${tiffName}`;
+  }
 }
 
-function selectShape(layer, shapeEntry) {
+function selectShape(layer, shapeEntry, shapeName) {
   switchToTab("mapView");
   map.fitBounds(layer.getBounds());
 
@@ -99,4 +176,9 @@ function selectShape(layer, shapeEntry) {
   }
   setPrevShapeEntry(shapeEntry);
   shapeEntry.classList.toggle("historyDivItemClicked");
+
+  // Update accordion header with the shape's name
+  if (shapeName) {
+    document.getElementById('step2').innerHTML = `Step 2: Crop - ${shapeName}`;
+  }
 }

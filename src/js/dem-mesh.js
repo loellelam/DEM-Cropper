@@ -14,35 +14,98 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 export function generateDEM() {
   const selectedGeotiff = getSelectedGeotiff();
   if (!selectedGeotiff) {
-    window.alert("Please select a geotiff in Step 1 first.");
+    window.alert("Please upload a geotiff in Step 1 first.");
+    return;
+  }
+  else if (!getSelectedShape()) {
+    window.alert("Please select a shape in Step 2 first.");
     return;
   }
 
   switchToTab("demView"); // Switch to the 3D Model tab
 
-  const base = 0.2;
+  // Get user input values
+  let base = parseFloat(document.getElementById("baseThicknessInput").value); // mm
+  let verticalExaggeration = parseFloat(document.getElementById("verticalExaggerationInput").value); // scale factor
+  let bedWidth = parseFloat(document.getElementById("bedWidthInput").value); // mm
+  let bedHeight = parseFloat(document.getElementById("bedHeightInput").value); // mm
+  let modelWidth = parseFloat(document.getElementById("modelWidthInput").value); // mm
+  let modelHeightInput = document.getElementById("modelHeightInput");
 
   const georaster = selectedGeotiff.georasters[0];
   const grid_x = georaster.width;
   const grid_y = georaster.height;
   let myElevation = georaster.values[0];
-  const flattenedArr = [];
+  const flattenedElevation = [];
+
+  console.log("projection:", georaster);
+  
+  // Need to check projection type. If pixelWidth is in degrees per pixel, convert to meters per pixel 
+  // Use center latitude bc degrees longitude vary with latitude
+  const centerLat = (georaster.ymin + georaster.ymax) / 2;
+  const circumference = 40075017; // meters
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat) / 360);
+  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLat; // meters per pixel
+  const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLon; // meters per pixel
+
+  console.log("metersPerWidthPixel:", metersPerWidthPixel);
+  console.log("metersPerHeightPixel:", metersPerHeightPixel);
+
+  // Calculate the total DEM size in millimeters
+  const demWidthMM = metersPerWidthPixel * georaster.width;
+  const demHeightMM = metersPerHeightPixel * georaster.height;
+
+  // On the first run, set model height based on aspect ratio
+  const aspectRatio = demHeightMM / demWidthMM;
+  const modelHeight = (modelWidth * aspectRatio).toFixed(2);
+  modelHeightInput.value = modelHeight;
+
+  // Use modelWidth/modelHeight for scaling
+  const scaleX = modelWidth / demWidthMM; // m / m ? 
+  const scaleY = modelHeight / demHeightMM; // should be same as scaleX if my model scales uniformly (if aspect ratio is preserved)
+
+  console.log("aspect ratio:", aspectRatio);
+  console.log("scaleX and scaleY:", scaleX, " ", scaleY);
+
+  console.log("DEM size in m:", demWidthMM, "x", demHeightMM);
+
   for (let i = 0; i < myElevation.length; i++) {
     for (let j = 0; j < myElevation[i].length; j++) {
-      // if (myElevation[i][j] < 0) myElevation[i][j] = 0;
-      flattenedArr.push(myElevation[i][j] * 0.0005); // adjust for more manageable elevations
+      // Only scale Z (elevation) here, X/Y scaling is handled in mesh creation
+      // scaleX is used to to proportionally scale elevation when model size changes
+      flattenedElevation.push(myElevation[i][j] * scaleX * verticalExaggeration);
     }
   }
-  myElevation = flattenedArr;
+  myElevation = flattenedElevation;
 
   const myMask = createBinaryMask(georaster, getSelectedShape());
 
-  createMesh(base, grid_x, grid_y, myElevation, myMask);
+
+
+  
+  // Calculate tiling based on scaled model size
+  const tilesX = Math.ceil(modelWidth / bedWidth);
+  const tilesY = Math.ceil(modelHeight / bedHeight);
+
+  console.log("Tiles X:", tilesX, "Tiles Y:", tilesY);
+
+
+  // createMesh(base, grid_x, grid_y, myElevation, myMask, realWidthMM, realHeightMM);
+  createMeshTiles(base, grid_x, grid_y, myElevation, myMask, modelWidth, modelHeight, tilesX, tilesY, bedWidth, bedHeight);
+
 }
 
 // Start of Three.js scene setup
 const scene = new THREE.Scene();
-scene.add(new THREE.AxesHelper(200));
+scene.add(new THREE.AxesHelper(1000));
+
+// Add a grid helper to visualize scale (1 unit = 1 mm)
+const gridSize = 1000; // width & height. 1000 mm = 1 meter
+const gridDivisions = 100; // 10 mm per division
+const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x444444, 0x444444);
+gridHelper.position.y = -2; // Slightly below mesh to avoid z-fighting
+scene.add(gridHelper);
 
 const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth * 0.7, window.innerHeight * 0.9); // Set initial size
@@ -55,8 +118,8 @@ resizeObserver.observe(container);
 renderer.setAnimationLoop(animate);
 document.getElementById("dem").appendChild(renderer.domElement);
 
-const camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
-camera.position.z = 5;
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 100;
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 scene.add(ambientLight);
@@ -83,17 +146,18 @@ function animate() {
     mask_m - 1d binary mask array
 */
 export let singletonMesh = null;
-function createMesh(base, grid_x, grid_y, elevation_m, mask_m) {
+function createMesh(base, grid_x, grid_y, elevation_m, mask_m, realWidthMM, realHeightMM) {
     if (singletonMesh) scene.remove(singletonMesh);
-    const z_base = -Math.abs(parseInt(base));
+
+    const z_base = -Math.abs(parseFloat(base));
     
-    grid_y = grid_x; // aspect ratio must be 1:1, otherwise it looks skewed
+    // grid_y = grid_x; // ratio must be 1:1, otherwise it looks skewed
 
     const x_count = parseInt(grid_x);
-    const x_step = 10/x_count; // 10 is arbitrarily chosen
-    
-    const y_count = parseInt(grid_y); 
-    const y_step = 10/y_count; 
+    const y_count = parseInt(grid_y);
+
+    const x_step = realWidthMM / x_count;   // 1 unit = 1 mm
+    const y_step = realHeightMM / y_count;  // 1 unit = 1 mm
 
     let geometries_array = [];
 
@@ -202,11 +266,11 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m) {
     const size = new THREE.Vector3();
     boundingBox.getSize(size);
 
-    const max_dim = Math.max(size.x, size.y, size.z);
-    const scale = 3/max_dim; // for resizing it to a size of 3 units
+    // const max_dim = Math.max(size.x, size.y, size.z);
+    // const scale = 3/max_dim; // for resizing it to a size of 3 units
 
-    singletonMesh.scale.set(scale, scale, scale);
-    singletonMesh.updateMatrix();
+    // singletonMesh.scale.set(scale, scale, scale);
+    // singletonMesh.updateMatrix();
     const boundingBox2 = new THREE.Box3().setFromObject(singletonMesh);
     //console.log(boundingBox2);
     const size2 = new THREE.Vector3();
@@ -221,10 +285,169 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m) {
     console.log(singletonMesh);
 }
 
+export let tileMeshes = null;
+function createMeshTiles(base, grid_x, grid_y, elevation_m, mask_m, realWidthMM, realHeightMM, tilesX, tilesY, bedWidth, bedHeight) {
+    // Remove previous meshes
+    if (tileMeshes) {
+      tileMeshes.forEach(m => scene.remove(m));
+    }
+    tileMeshes = [];
+
+    const x_count = parseInt(grid_x);
+    const y_count = parseInt(grid_y);
+    const x_step = realWidthMM / x_count;
+    const y_step = realHeightMM / y_count;
+    const z_base = -Math.abs(parseFloat(base));
+
+    // Calculate grid indices per tile (even split)
+    const tileGridX = Math.floor(x_count / tilesX);
+    const tileGridY = Math.floor(y_count / tilesY);
+
+    for (let tx = 0; tx < tilesX; tx++) {
+      for (let ty = 0; ty < tilesY; ty++) {
+        let geometries_array = [];
+        // Calculate start/end indices for this tile
+        const startX = tx * tileGridX;
+        const endX = (tx === tilesX - 1) ? x_count : (tx + 1) * tileGridX;
+        const startY = ty * tileGridY;
+        const endY = (ty === tilesY - 1) ? y_count : (ty + 1) * tileGridY;
+        for (let x = startX; x < endX - 1; x++) {
+          for (let y = startY; y < endY - 1; y++) {
+            // ...same mesh logic as createMesh, but only for this tile...
+            const v1 = get_x_y(mask_m, x, y, x_count, y_count);
+            const v2 = get_x_y(mask_m, x+1, y, x_count, y_count);
+            const v3 = get_x_y(mask_m, x, y+1, x_count, y_count);
+            const v4 = get_x_y(mask_m, x+1, y+1, x_count, y_count);
+            const e1 = get_x_y(elevation_m, x, y, x_count, y_count);
+            const e2 = get_x_y(elevation_m, x+1, y, x_count, y_count);
+            const e3 = get_x_y(elevation_m, x, y+1, x_count, y_count);
+            const e4 = get_x_y(elevation_m, x+1, y+1, x_count, y_count);
+            if (v1==1 && v2==1 && v3==1 && v4==1 && e1 >=0 && e2 >=0 && e3>=0 && e4>=0) {
+                let points = [
+                    new THREE.Vector3(x*x_step, y*y_step, z_base),
+                    new THREE.Vector3(x*x_step, y*y_step, e1),
+                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base),
+                    new THREE.Vector3((x+1)*x_step, y*y_step, e2),
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base),
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, e3),
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base),
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, e4),
+                ];
+                let vox_geometry = new ConvexGeometry(points);
+                geometries_array.push(vox_geometry);
+            } else if (v1==1 && v2==1 && v3==1 && e1 >=0 && e2 >=0 && e3>=0) { // point #4 is null
+                let points =[
+                    new THREE.Vector3(x*x_step, y*y_step, z_base), // v1
+                    new THREE.Vector3(x*x_step, y*y_step, get_x_y(elevation_m, x, y, x_count, y_count)),
+                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base), // v2
+                    new THREE.Vector3((x+1)*x_step, y*y_step, get_x_y(elevation_m, (x+1), y, x_count, y_count)),
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
+                    
+                ];
+
+                let  vox_geometry = new ConvexGeometry(points);
+              geometries_array.push(vox_geometry);
+            } else if (v1==1 && v2==1 && v4==1 && e1>=0 && e2>=0 && e4>=0) {
+                let points =[
+                    new THREE.Vector3(x*x_step, y*y_step, z_base), // v1
+                    new THREE.Vector3(x*x_step, y*y_step, get_x_y(elevation_m, x, y, x_count, y_count)),
+                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base), // v2
+                    new THREE.Vector3((x+1)*x_step, y*y_step, get_x_y(elevation_m, (x+1), y, x_count, y_count)),
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
+                ];
+
+                let vox_geometry = new ConvexGeometry(points);
+              geometries_array.push(vox_geometry);
+            } else if (v2==1 && v3==1 && v4==1 && e2>=0 && e3 >=0 && e4>=0) {
+                let points =[
+                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base), // v2
+                    new THREE.Vector3((x+1)*x_step, y*y_step, get_x_y(elevation_m, (x+1), y, x_count, y_count)),
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
+                ];
+
+                let vox_geometry = new ConvexGeometry(points);
+              geometries_array.push(vox_geometry);
+            } else if (v1==1 && v3==1 && v4==1 && e1 >=0 && e3>=0 && e4>=0) {
+                let points =[
+                    new THREE.Vector3(x*x_step, y*y_step, z_base), // v1
+                    new THREE.Vector3(x*x_step, y*y_step, get_x_y(elevation_m, x, y, x_count, y_count)),
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
+                    new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
+                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
+                ];
+
+                let vox_geometry = new ConvexGeometry(points);
+              geometries_array.push(vox_geometry);
+            }
+          }
+        }
+        if (geometries_array.length > 0) {
+          let mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries_array);
+          var mergedMaterial = new THREE.MeshStandardMaterial( { color: 0xcccccc, side: THREE.DoubleSide } );
+          mergedMaterial.needsUpdate = true;
+
+          var mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
+          mergedMesh.rotateX(3*Math.PI / 2);
+
+          // Center the mesh for this tile
+          const boundingBox = new THREE.Box3().setFromObject(mergedMesh);
+          const size = new THREE.Vector3();
+          boundingBox.getSize(size);
+          mergedMesh.position.x -= boundingBox.min.x + size.x/2;
+          mergedMesh.position.y -= boundingBox.min.y + size.y/2;
+          mergedMesh.position.z -= boundingBox.min.z + size.z/2;
+
+          // Offset mesh so tiles don't overlap
+          mergedMesh.position.x += startX * x_step;
+          mergedMesh.position.z -= startY * y_step;
+          mergedMesh.updateMatrix();
+          
+          scene.add(mergedMesh);
+          tileMeshes.push(mergedMesh);
+        }
+      }
+    }
+}
+
 // Helper for createMesh: Get the 1d coord based on the 2d x,y coord
 function get_x_y(arr, x, y, x_count, y_count) {
   if (x>=x_count || y >= y_count) return null; //if dimensions are out of bounds, return null
   const flippedY = y_count - 1 - y; // flip the y-axis
   return arr[flippedY * x_count + x]; // returns the value (0 or 1) at specified location
   // return arr[y * (x_count + 1) + x];
+}
+
+// Converts degrees to meters at a given latitude
+function degreesToMeters(degrees, latitude) {
+  // Longitude: meters = degrees * 111320 * cos(latitude)
+  // Latitude: meters = degrees * 110574
+  const latRad = latitude * Math.PI / 180;
+  const metersPerDegreeLon = 111320 * Math.cos(latRad);
+  const metersPerDegreeLat = 110574;
+  return {
+    x: Math.abs(degrees.x) * metersPerDegreeLon,
+    y: Math.abs(degrees.y) * metersPerDegreeLat
+  };
+}
+
+// Helper to get DEM aspect ratio for model dimension sync
+export function getAspectRatio() {
+  const selectedGeotiff = getSelectedGeotiff();
+  if (!selectedGeotiff) return 1;
+  const georaster = selectedGeotiff.georasters[0];
+  const centerLat = (georaster.ymin + georaster.ymax) / 2;
+  const circumference = 40075017;
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat) / 360);
+  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLat;
+  const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLon;
+  const demWidthMM = metersPerWidthPixel * georaster.width;
+  const demHeightMM = metersPerHeightPixel * georaster.height;
+  return demHeightMM / demWidthMM;
 }
