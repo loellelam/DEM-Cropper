@@ -38,6 +38,7 @@ export function generateDEM() {
   let myElevation = georaster.values[0];
   const flattenedElevation = [];
 
+  console.log("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
   console.log("projection:", georaster);
   
   // Need to check projection type. If pixelWidth is in degrees per pixel, convert to meters per pixel 
@@ -52,23 +53,24 @@ export function generateDEM() {
   console.log("metersPerWidthPixel:", metersPerWidthPixel);
   console.log("metersPerHeightPixel:", metersPerHeightPixel);
 
-  // Calculate the total DEM size in millimeters
-  const demWidthMM = metersPerWidthPixel * georaster.width;
-  const demHeightMM = metersPerHeightPixel * georaster.height;
+  // Calculate the total DEM size in meters
+  const demWidth = metersPerWidthPixel * georaster.width;
+  const demHeight = metersPerHeightPixel * georaster.height;
 
   // On the first run, set model height based on aspect ratio
-  const aspectRatio = demHeightMM / demWidthMM;
+  const aspectRatio = demHeight / demWidth;
   const modelHeight = (modelWidth * aspectRatio).toFixed(2);
   modelHeightInput.value = modelHeight;
 
   // Use modelWidth/modelHeight for scaling
-  const scaleX = modelWidth / demWidthMM; // m / m ? 
-  const scaleY = modelHeight / demHeightMM; // should be same as scaleX if my model scales uniformly (if aspect ratio is preserved)
+  const scaleX = modelWidth / demWidth; // mm/mm
+  const scaleY = modelHeight / demHeight; // should be same as scaleX if my model scales uniformly (if aspect ratio is preserved)
 
+  console.log("model height:", modelHeight);
   console.log("aspect ratio:", aspectRatio);
   console.log("scaleX and scaleY:", scaleX, " ", scaleY);
 
-  console.log("DEM size in m:", demWidthMM, "x", demHeightMM);
+  console.log("DEM size in m:", demWidth, "x", demHeight);
 
   for (let i = 0; i < myElevation.length; i++) {
     for (let j = 0; j < myElevation[i].length; j++) {
@@ -91,9 +93,9 @@ export function generateDEM() {
   console.log("Tiles X:", tilesX, "Tiles Y:", tilesY);
 
 
-  // createMesh(base, grid_x, grid_y, myElevation, myMask, realWidthMM, realHeightMM);
+  // createMesh(base, grid_x, grid_y, myElevation, myMask, modelWidth, modelHeight);
   createMeshTiles(base, grid_x, grid_y, myElevation, myMask, modelWidth, modelHeight, tilesX, tilesY, bedWidth, bedHeight);
-
+  // createUnitCube();
 }
 
 // Start of Three.js scene setup
@@ -146,7 +148,7 @@ function animate() {
     mask_m - 1d binary mask array
 */
 export let singletonMesh = null;
-function createMesh(base, grid_x, grid_y, elevation_m, mask_m, realWidthMM, realHeightMM) {
+function createMesh(base, grid_x, grid_y, elevation_m, mask_m, modelWidth, modelHeight) {
     if (singletonMesh) scene.remove(singletonMesh);
 
     const z_base = -Math.abs(parseFloat(base));
@@ -156,8 +158,8 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m, realWidthMM, real
     const x_count = parseInt(grid_x);
     const y_count = parseInt(grid_y);
 
-    const x_step = realWidthMM / x_count;   // 1 unit = 1 mm
-    const y_step = realHeightMM / y_count;  // 1 unit = 1 mm
+    const x_step = modelWidth / x_count;   // 1 unit = 1 mm
+    const y_step = modelHeight / y_count;  // 1 unit = 1 mm
 
     let geometries_array = [];
 
@@ -286,31 +288,35 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m, realWidthMM, real
 }
 
 export let tileMeshes = null;
-function createMeshTiles(base, grid_x, grid_y, elevation_m, mask_m, realWidthMM, realHeightMM, tilesX, tilesY, bedWidth, bedHeight) {
+function createMeshTiles(base, grid_x, grid_y, elevation_m, mask_m, modelWidth, modelHeight, tilesX, tilesY, bedWidth, bedHeight) {
     // Remove previous meshes
     if (tileMeshes) {
       tileMeshes.forEach(m => scene.remove(m));
     }
     tileMeshes = [];
 
-    const x_count = parseInt(grid_x);
-    const y_count = parseInt(grid_y);
-    const x_step = realWidthMM / x_count;
-    const y_step = realHeightMM / y_count;
+    const x_count = parseInt(grid_x); // number of pixels/columns
+    const y_count = parseInt(grid_y); // number of pixels/rows
+    const x_step = modelWidth / x_count; // physical width in mm for each pixel
+    const y_step = modelHeight / y_count; // physical height in mm per pixel
     const z_base = -Math.abs(parseFloat(base));
 
-    // Calculate grid indices per tile (even split)
+    // Calculates how many DEM rows/columns (grid cells) go into each tile
     const tileGridX = Math.floor(x_count / tilesX);
     const tileGridY = Math.floor(y_count / tilesY);
 
+    // Iterate over each tile
     for (let tx = 0; tx < tilesX; tx++) {
       for (let ty = 0; ty < tilesY; ty++) {
         let geometries_array = [];
+
         // Calculate start/end indices for this tile
         const startX = tx * tileGridX;
         const endX = (tx === tilesX - 1) ? x_count : (tx + 1) * tileGridX;
         const startY = ty * tileGridY;
         const endY = (ty === tilesY - 1) ? y_count : (ty + 1) * tileGridY;
+
+        // Iterate over each grid cell in this tile
         for (let x = startX; x < endX - 1; x++) {
           for (let y = startY; y < endY - 1; y++) {
             // ...same mesh logic as createMesh, but only for this tile...
@@ -447,7 +453,16 @@ export function getAspectRatio() {
   const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat) / 360);
   const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLat;
   const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLon;
-  const demWidthMM = metersPerWidthPixel * georaster.width;
-  const demHeightMM = metersPerHeightPixel * georaster.height;
-  return demHeightMM / demWidthMM;
+  const demWidth = metersPerWidthPixel * georaster.width;
+  const demHeight = metersPerHeightPixel * georaster.height;
+  return demHeight / demWidth;
+}
+
+function createUnitCube() {
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true });
+  const cube = new THREE.Mesh(geometry, material);
+  singletonMesh = cube; // Set singletonMesh to the cube for consistency
+  cube.position.set(0, -2, 0); // Position it below the grid
+  scene.add(cube);
 }

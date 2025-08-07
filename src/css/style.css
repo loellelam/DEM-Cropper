@@ -238,7 +238,6 @@ button:hover {
   display: none;
   position: absolute;
   bottom: 110%;
-  left: -6em;;
   background-color: #fff;
   border: 1px solid #ccc;
   border-radius: 4px;
@@ -258,7 +257,7 @@ button:hover {
   flex: 1;
 }
 
-.input-row input[type="number"] {
+.input-row input[type="number"], .input-row select {
   width: 80px !important;
   height: 25px;
   margin-bottom: 6px;
