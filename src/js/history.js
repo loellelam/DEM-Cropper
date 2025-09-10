@@ -53,9 +53,24 @@ export function addTiffToHistory(layer, name, divContainer) {
     }
   };
 
+  // Add Delete button for TIFF
+  const removeButton = document.createElement("button");
+  removeButton.classList.add("historyButton");
+  removeButton.innerHTML = '<i class="fas fa-trash-can"></i>';
+  removeButton.title = "Delete";
+  removeButton.onclick = (e) => {
+    e.stopPropagation();
+    map.removeLayer(layer); // Remove TIFF from map
+    tiffEntry.remove();     // Remove entry from history
+    setSelectedGeotiff(null);
+    document.getElementById('tiffUpload').value = ""; // Reset file input
+    document.getElementById('step1').innerHTML = "Step 1: GeoTIFF"; // Reset accordion header
+  };
+
   tiffEntry.appendChild(tiffText);
   tiffEntry.appendChild(eyeButton);
   tiffEntry.appendChild(renameButton);
+  tiffEntry.appendChild(removeButton);
   document.getElementById(divContainer).appendChild(tiffEntry);
 }
 

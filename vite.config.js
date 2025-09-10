@@ -4,5 +4,5 @@
  */
 
 export default {
-  base: '/DEM-Cropper/', // repo name
+  base: '/Leaflet-Geotiff/', // repo name
 }

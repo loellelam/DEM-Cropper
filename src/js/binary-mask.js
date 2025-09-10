@@ -111,15 +111,6 @@ export function createBinaryMask(geoRaster, shape) {
     }
   }
 
-  // let countM = 0;
-  // for (let i = 0; i < flattenedArr.length; i++) {
-  //   if (flattenedArr[i] == 1) {
-  //     countM++;
-  //   }
-  // }
-  // console.log("num of 1s in binary mask:", countM);
-  // console.log("num of 0s in binary mask:", flattenedArr.length - countM);
-
   return flattenedArr;
 
   // return mask; //2d array

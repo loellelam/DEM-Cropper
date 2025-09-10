@@ -263,3 +263,9 @@ button:hover {
   margin-bottom: 6px;
   margin-right: 6px;
 }
+
+#customExaggerationBtn {
+  height: 25px;
+  margin: 0;
+  padding: 0;
+}
