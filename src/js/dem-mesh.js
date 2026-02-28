@@ -6,6 +6,8 @@ import { switchToTab } from './tab-switching.js';
 import { getSelectedGeotiff, getSelectedShape } from './selection.js';
 import { getCurrentVerticalExaggeration } from './toggle-vertical-exaggeration.js';
 import { createBinaryMask } from './binary-mask.js';
+import { cutMeshWithPlane } from './model-partitioning.js';
+import { sendMeshToBackend } from './main.js';
 
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
@@ -14,7 +16,7 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { CSG } from 'three-csg-ts';
 
 // Three.js scene singleton
-const { scene, camera, renderer } = setupScene();
+export const { scene, camera, renderer } = setupScene();
 
 // Three.js scene setup
 function setupScene() {
@@ -72,7 +74,7 @@ function animate(scene, camera, renderer) {
 }
 
 
-export function generateDEM() {
+export async function generateDEM() {
   // Get selected geotiff and shape
   const selectedGeotiff = getSelectedGeotiff();
   const selectedShape = getSelectedShape();
@@ -131,7 +133,7 @@ export function generateDEM() {
 
   // On the first run, set model height based on aspect ratio
   const aspectRatio = demHeight / demWidth;
-  const physicalHeight = 100; //(physicalWidth * aspectRatio).toFixed(2);
+  const physicalHeight = physicalWidth; //(physicalWidth * aspectRatio).toFixed(2);
   physicalHeightInput.value = physicalHeight;
 
   // Use physicalWidth/physicalHeight for scaling
@@ -210,7 +212,7 @@ export function generateDEM() {
   const tilesX = Math.ceil(physicalWidth / bedWidth);
   const tilesY = Math.ceil(physicalHeight / bedHeight);
 
-  console.log("Tiles X:", tilesX, "Tiles Y:", tilesY);
+  // console.log("Tiles X:", tilesX, "Tiles Y:", tilesY);
 
   console.log("physicalWidth:", physicalWidth, "physicalHeight:", physicalHeight);
 
@@ -228,7 +230,22 @@ export function generateDEM() {
   const ratio = calculateRatio();
   scaleByTargetDimensions(ratio);
   centerMesh();
+  singletonMesh.updateMatrixWorld();
+
+  // Send mesh data to backend for processing
+  const maskedElevation = applyMaskToElevation(myElevation, myMask);
+  const maskedElevation2D = convertElevationInto2DArray(maskedElevation, grid_x, grid_y);
+  // const naiveCutsX = Math.max(1, Math.ceil(physicalWidth / bedWidth));
+  // const naiveCutsY = Math.max(1, Math.ceil(physicalHeight / bedHeight));
+  let result = await sendMeshToBackend(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight);
+  console.log("Best cut from backend:", result);
+  visualizeGenerations(result.best_cut, grid_x, grid_y);
+
+  // let x_coord = 10;
+  // const { leftMesh, rightMesh } = cutMeshWithPlane(x_coord);
+
   // tileMeshes = splitMeshIntoTiles(bedWidth, bedHeight);
+  // createTileBoxes(physicalWidth, physicalHeight, bedWidth, bedHeight)
 }
 
 /* input:
@@ -554,8 +571,8 @@ function centerMesh() {
   singletonMesh.position.z -= boundingBox.min.z + size.z/2;
   singletonMesh.updateMatrix();
 
-  const bb = new THREE.Box3().setFromObject(singletonMesh);
-  console.log("bounding box after centering", bb);
+  // const bb = new THREE.Box3().setFromObject(singletonMesh);
+  // console.log("bounding box after centering", bb);
 }
 
 function scaleByDemDimensions() {
@@ -563,7 +580,7 @@ function scaleByDemDimensions() {
   //   const mesh = tileMeshes[i];
 
     const bb = new THREE.Box3().setFromObject(singletonMesh);
-    console.log("bounding box before", bb)
+    // console.log("bounding box before", bb)
 
     // Apply scaling to each mesh based on DEM dimensions
     const selectedGeotiff = getSelectedGeotiff();
@@ -574,7 +591,7 @@ function scaleByDemDimensions() {
     singletonMesh.scale.multiply(new THREE.Vector3(metersPerWidthPixel, metersPerHeightPixel, 1));
 
     const boundingBox = new THREE.Box3().setFromObject(singletonMesh);
-    console.log("bounding box after", boundingBox)
+    // console.log("bounding box after", boundingBox)
   // }
 }
 
@@ -587,11 +604,7 @@ function calculateRatio() {
   let physicalWidth = parseFloat(document.getElementById("physicalWidthInput").value); // mm
   let physicalHeight = parseFloat(document.getElementById("physicalHeightInput").value); // mm
 
-  console.log("physicalWidth/size.x", physicalWidth, " / ", size.x);
-  console.log("physicalHeight/size.z", physicalHeight, " / ", size.z);
-
   const ratio = Math.min(physicalWidth / size.x, physicalHeight / size.z);
-  console.log("ratio:", ratio);
   return ratio;
 }
 
@@ -603,14 +616,20 @@ function scaleByTargetDimensions(ratio) {
     // singletonMesh.scale.set(10,10,10);
     
     const bb = new THREE.Box3().setFromObject(singletonMesh);
-    console.log("bounding box after target scale", bb);
+    // console.log("bounding box after target scale", bb);
   // }
 }
 
-// function splitMeshIntoTiles(bedWidth, bedHeight) {
+// function splitMeshIntoTiles(bedWidth, bedHeight, maxHeight = 2000) {
+//   if (!singletonMesh) {
+//     console.error("singletonMesh not found.");
+//     return [];
+//   }
+
 //   const boundingBox = new THREE.Box3().setFromObject(singletonMesh);
 //   const min = boundingBox.min;
 //   const size = boundingBox.getSize(new THREE.Vector3());
+
 //   const tilesX = Math.ceil(size.x / bedWidth);
 //   const tilesY = Math.ceil(size.z / bedHeight);
 
@@ -618,96 +637,85 @@ function scaleByTargetDimensions(ratio) {
 
 //   for (let tx = 0; tx < tilesX; tx++) {
 //     for (let ty = 0; ty < tilesY; ty++) {
-//       // Define tile bounds
-//       const tileMinX = min.x + tx * bedWidth;
-//       const tileMaxX = tileMinX + bedWidth;
-//       const tileMinZ = min.z + ty * bedHeight;
-//       const tileMaxZ = tileMinZ + bedHeight;
+//       // Make a clipping box for this tile
+//       const boxGeom = new THREE.BoxGeometry(bedWidth, maxHeight, bedHeight);
+//       const boxMesh = new THREE.Mesh(boxGeom, new THREE.MeshStandardMaterial());
 
-//       // Filter geometry for this tile
-//       const originalGeometry = singletonMesh.geometry;
-//       const positions = originalGeometry.attributes.position;
-//       const indices = originalGeometry.index ? originalGeometry.index.array : null;
+//       // Position the clipping box correctly
+//       boxMesh.position.set(
+//         min.x + tx * bedWidth + bedWidth / 2,
+//         min.y + maxHeight / 2, // lift it up so it covers vertically
+//         min.z + ty * bedHeight + bedHeight / 2
+//       );
 
-//       // Collect faces (triangles) that are fully inside the tile bounds
-//       const tileIndices = [];
-//       for (let i = 0; i < positions.count; i += 3) {
-//         // For indexed geometry
-//         let verts = [];
-//         for (let j = 0; j < 3; j++) {
-//           const idx = indices ? indices[i + j] : i + j;
-//           const x = positions.getX(idx);
-//           const z = positions.getZ(idx);
-//           verts.push({ x, z });
-//         }
-//         // Check if all vertices are inside the tile bounds
-//         if (
-//           verts.every(v =>
-//             v.x >= tileMinX && v.x < tileMaxX &&
-//             v.z >= tileMinZ && v.z < tileMaxZ
-//           )
-//         ) {
-//           tileIndices.push(indices ? indices[i] : i, indices ? indices[i+1] : i+1, indices ? indices[i+2] : i+2);
-//         }
-//       }
+//       // Intersect with terrain
+//       const tileCSG = CSG.intersect(singletonMesh, boxMesh);
 
-//       if (tileIndices.length > 0) {
-//         // Create new geometry for this tile
-//         const tileGeometry = new THREE.BufferGeometry();
-//         tileGeometry.setAttribute('position', positions.clone());
-//         tileGeometry.setIndex(tileIndices);
-
-//         const tileMesh = new THREE.Mesh(tileGeometry, singletonMesh.material.clone());
-//         tileMeshes.push(tileMesh);
-//         scene.add(tileMesh);
+//       if (tileCSG) {
+//         tileCSG.material = singletonMesh.material.clone();
+//         scene.add(tileCSG);
+//         tileMeshes.push(tileCSG);
 //       }
 //     }
 //   }
-//   console.log("Created", tileMeshes.length, "tile meshes");
+
+//   console.log("Created", tileMeshes.length, "CSG tile meshes");
 //   return tileMeshes;
 // }
 
-function splitMeshIntoTiles(bedWidth, bedHeight, maxHeight = 2000) {
+function createTileBoxes(physicalWidth, physicalHeight, bedWidth, bedHeight) {
   if (!singletonMesh) {
     console.error("singletonMesh not found.");
     return [];
   }
 
+  // Get bounding box of DEM after all transforms
   const boundingBox = new THREE.Box3().setFromObject(singletonMesh);
   const min = boundingBox.min;
   const size = boundingBox.getSize(new THREE.Vector3());
+  console.log("DEM bounding box:", boundingBox);
 
-  const tilesX = Math.ceil(size.x / bedWidth);
-  const tilesY = Math.ceil(size.z / bedHeight);
+  const bounding_w = size.x;
+  const bounding_h = size.z;
 
-  const tileMeshes = [];
+  // Number of tiles horizontally and vertically
+  const numTilesX = Math.ceil(physicalWidth / bedWidth);
+  const numTilesY = Math.ceil(physicalHeight / bedHeight);
 
-  for (let tx = 0; tx < tilesX; tx++) {
-    for (let ty = 0; ty < tilesY; ty++) {
-      // Make a clipping box for this tile
-      const boxGeom = new THREE.BoxGeometry(bedWidth, maxHeight, bedHeight);
-      const boxMesh = new THREE.Mesh(boxGeom, new THREE.MeshStandardMaterial());
+  console.log(`Chessboard: ${numTilesX} x ${numTilesY} tiles`);
 
-      // Position the clipping box correctly
-      boxMesh.position.set(
-        min.x + tx * bedWidth + bedWidth / 2,
-        min.y + maxHeight / 2, // lift it up so it covers vertically
-        min.z + ty * bedHeight + bedHeight / 2
-      );
+  const tileBoxes = [];
 
-      // Intersect with terrain
-      const tileCSG = CSG.intersect(singletonMesh, boxMesh);
+  for (let i = 0; i < numTilesY; i++) {
+    for (let j = 0; j < numTilesX; j++) {
+      // Create a thin box (just a wireframe outline for now)
+      const tileWidth = bounding_w / numTilesX;
+      const tileHeight = bounding_h / numTilesY;
+      
+      const boxGeom = new THREE.BoxGeometry(tileWidth, 2, tileHeight);
+      // const wireMat = new THREE.MeshBasicMaterial({ color: 0x0000ff, wireframe: true });
+      // Alternate colors like a checkerboard
+      const isEven = (i + j) % 2 === 0;
+      const color = isEven ? 0x00ff00 : 0x0000ff; // green / blue
+      const mat = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.25, // semi-transparent
+      });
+      const tileBox = new THREE.Mesh(boxGeom, mat);
 
-      if (tileCSG) {
-        tileCSG.material = singletonMesh.material.clone();
-        scene.add(tileCSG);
-        tileMeshes.push(tileCSG);
-      }
+      // Position box on the chessboard
+      const xPos = min.x + j * tileWidth + tileWidth / 2; // do tileWidth/2 to shift to center of this tile (because Three.js positions meshes at their center, not corner)
+      const zPos = min.z + i * tileHeight + tileHeight / 2;
+      const yPos = min.y; // keep it aligned with base of DEM
+      tileBox.position.set(xPos, yPos, zPos);
+
+      scene.add(tileBox);
+      tileBoxes.push(tileBox);
     }
   }
 
-  console.log("Created", tileMeshes.length, "CSG tile meshes");
-  return tileMeshes;
+  return tileBoxes;
 }
 
 // Converts degrees to meters at a given latitude
@@ -749,3 +757,75 @@ function getShapeAspectRatio() {
   
   return height / width;
 }
+
+function convertElevationInto2DArray(myElevation, grid_x, grid_y) {
+  const elevation2D = [];
+  for (let i = 0; i < grid_y; i++) {
+    const row = [];
+    for (let j = 0; j < grid_x; j++) {
+      const index = i * grid_x + j;
+      row.push(myElevation[index]);
+    }
+    elevation2D.push(row);
+  }
+  return elevation2D;
+}
+
+function applyMaskToElevation(elevation, mask) {
+  const maskedElevation = [];
+  for (let i = 0; i < elevation.length; i++) {
+    if (mask[i] === 0 || elevation[i] < -2e+30) { // no data values
+      maskedElevation.push(NaN);
+    }
+    else if (mask[i] === 1) {
+      maskedElevation.push(elevation[i]);
+    }
+    else {
+      console.log("Unexpected mask value at index", i, "mask:", mask[i], "elevation:", elevation[i]);
+    }
+  }
+  return maskedElevation;
+}
+
+function visualizeGenerations(individual, grid_x, grid_y) {
+  const container = document.getElementById("generation-visualization");
+  container.innerHTML = ""; // Clear previous visualizations
+
+  // response.generations.forEach((generation, genIndex) => {
+    const genDiv = document.createElement("div");
+    genDiv.className = "generation";
+    // genDiv.innerHTML = `<h3>Generation ${genIndex + 1}</h3>`;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = grid_x;
+    canvas.height = grid_y;
+    genDiv.appendChild(canvas);
+
+    const ctx = canvas.getContext("2d");
+    const imageData = ctx.createImageData(grid_x, grid_y);
+
+    // Map elevation values to colors
+    individual.forEach((row, y) => {
+      row.forEach((value, x) => {
+        const color = valueToColor(value);
+        const index = (x + y * grid_x) * 4;
+        imageData.data[index] = color.r;
+        imageData.data[index + 1] = color.g;
+        imageData.data[index + 2] = color.b;
+        imageData.data[index + 3] = 255; // Alpha
+      });
+    });
+
+    ctx.putImageData(imageData, 0, 0);
+    container.appendChild(genDiv);
+  // });
+}
+
+function valueToColor(value) {
+  const normalized = Math.min(Math.max((value) / 20, 0), 1); // Normalize between 0 and 1 for an input range of 0 to 5
+  const gray = Math.floor(normalized * 255);
+  return { r: gray, g: gray, b: gray };
+}
+
+// function createMeshFromLabelMap(label_flat, elevation_flat, grid_x, grid_y, physicalWidth, physicalHeight, base, opts)
+// // mirrors createMesh but uses the label map to decide which voxels belong to the individual (label_flat[i] === labelId).
