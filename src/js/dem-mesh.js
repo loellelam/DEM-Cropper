@@ -238,8 +238,9 @@ export async function generateDEM() {
   // const naiveCutsX = Math.max(1, Math.ceil(physicalWidth / bedWidth));
   // const naiveCutsY = Math.max(1, Math.ceil(physicalHeight / bedHeight));
   let result = await sendMeshToBackend(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight);
-  console.log("Best cut from backend:", result);
-  visualizeGenerations(result.best_cut, grid_x, grid_y);
+  const best_cut = result.best_cut;
+
+  createMeshesFromLabelMap(best_cut, maskedElevation, grid_x, grid_y, physicalWidth, physicalHeight, base);
 
   // let x_coord = 10;
   // const { leftMesh, rightMesh } = cutMeshWithPlane(x_coord);
@@ -787,45 +788,94 @@ function applyMaskToElevation(elevation, mask) {
   return maskedElevation;
 }
 
-function visualizeGenerations(individual, grid_x, grid_y) {
-  const container = document.getElementById("generation-visualization");
-  container.innerHTML = ""; // Clear previous visualizations
+export let partitionMeshes = [];
+/**
+ * Build one binary mask per label in a label map and call createMesh() for each.
+ * Returns an object mapping labelId -> mesh (added to scene).
+ *
+ * label_map: either 2D array [rows][cols] or flattened 1D array length grid_x*grid_y
+ * elevation_m: flattened 1D elevation array (same ordering as createMesh expects)
+ * grid_x, grid_y, physicalWidth, physicalHeight, base: passed to createMesh
+ */
+function createMeshesFromLabelMap(label_map, elevation_m, grid_x, grid_y, physicalWidth, physicalHeight, base, opts = {}) {
+  console.log("Partitioning...");
 
-  // response.generations.forEach((generation, genIndex) => {
-    const genDiv = document.createElement("div");
-    genDiv.className = "generation";
-    // genDiv.innerHTML = `<h3>Generation ${genIndex + 1}</h3>`;
+  // Remove any previously created partition meshes from the scene and free resources
+  if (partitionMeshes && partitionMeshes.length) {
+    for (const m of partitionMeshes) {
+      try {
+        if (m) {
+          scene.remove(m);
+          if (m.geometry && typeof m.geometry.dispose === 'function') m.geometry.dispose();
+          if (m.material) {
+            if (Array.isArray(m.material)) {
+              m.material.forEach(mat => { if (mat && typeof mat.dispose === 'function') mat.dispose(); });
+            } else if (typeof m.material.dispose === 'function') {
+              m.material.dispose();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Error disposing previous partition mesh:", err);
+      }
+    }
+  }
+  // reset storage
+  partitionMeshes = [];
 
-    const canvas = document.createElement("canvas");
-    canvas.width = grid_x;
-    canvas.height = grid_y;
-    genDiv.appendChild(canvas);
+  // normalize label map to flattened row-major array (same ordering as flattenedElevation earlier)
+  let label_flat = [];
+  if (!label_map) console.warn("No label map provided");
+  for (let i = 0; i < label_map.length; i++) {
+    for (let j = 0; j < label_map[i].length; j++) {
+      label_flat.push(label_map[i][j]);
+    }
+  }
 
-    const ctx = canvas.getContext("2d");
-    const imageData = ctx.createImageData(grid_x, grid_y);
+  const total = parseInt(grid_x) * parseInt(grid_y);
+  if (label_flat.length !== total) {
+    console.warn("Label map size doesn't match grid_x*grid_y:", label_flat.length, "vs", total);
+  }
 
-    // Map elevation values to colors
-    individual.forEach((row, y) => {
-      row.forEach((value, x) => {
-        const color = valueToColor(value);
-        const index = (x + y * grid_x) * 4;
-        imageData.data[index] = color.r;
-        imageData.data[index + 1] = color.g;
-        imageData.data[index + 2] = color.b;
-        imageData.data[index + 3] = 255; // Alpha
-      });
-    });
+  // collect unique non-negative labels
+  const labelSet = new Set();
+  for (let i = 0; i < Math.min(label_flat.length, total); i++) {
+    const v = label_flat[i];
+    if (typeof v === 'number' && v >= 0) labelSet.add(Math.trunc(v));
+  }
+  const labels = Array.from(labelSet).sort((a,b) => a-b);
 
-    ctx.putImageData(imageData, 0, 0);
-    container.appendChild(genDiv);
-  // });
+  // For each label, build binary mask and call createMesh.
+  // We rely on createMesh to produce singletonMesh; after each call we clone and keep a copy
+  for (const labelId of labels) {
+    const mask = new Array(total).fill(0);
+    for (let i = 0; i < total && i < label_flat.length; i++) {
+      if (label_flat[i] === labelId) mask[i] = 1;
+    }
+
+    // createMesh will add singletonMesh to scene; it will remove any existing singletonMesh at start
+    createMesh(base, grid_x, grid_y, elevation_m, mask, physicalWidth, physicalHeight);
+
+    // if createMesh created something, clone and keep it under this label
+    if (singletonMesh) {
+      // clone geometry + material so later removals/changes don't affect saved partition
+      const copy = singletonMesh.clone(true);
+      copy.material = singletonMesh.material.clone();
+      // give each partition a distinguishable color
+      copy.material.color = new THREE.Color().setHSL((labelId * 0.618033988749895) % 1, 0.5, 0.5);
+      copy.name = `partition_${labelId}`;
+      scene.add(copy);
+      partitionMeshes.push(copy);
+
+      // leave original singletonMesh in place so next createMesh call will remove it
+    }
+  }
+
+  // cleanup: remove the last singletonMesh produced by createMesh (we saved clones)
+  if (singletonMesh) {
+    scene.remove(singletonMesh);
+    singletonMesh = null;
+  }
+
+  return partitionMeshes;
 }
-
-function valueToColor(value) {
-  const normalized = Math.min(Math.max((value) / 20, 0), 1); // Normalize between 0 and 1 for an input range of 0 to 5
-  const gray = Math.floor(normalized * 255);
-  return { r: gray, g: gray, b: gray };
-}
-
-// function createMeshFromLabelMap(label_flat, elevation_flat, grid_x, grid_y, physicalWidth, physicalHeight, base, opts)
-// // mirrors createMesh but uses the label map to decide which voxels belong to the individual (label_flat[i] === labelId).

@@ -25,6 +25,10 @@ class Individual(object):
         width_per_pixel_mm = physical_width / W
         height_per_pixel_mm = physical_height / H
 
+        # Helper: Clamps fitness score to between 0 and 1, inclusive
+        def clamp01(x):
+            return max(0.0, min(1.0, float(x)))
+
         # Criteria 1: fits in printer volume
         fits = []
         # Criteria 2: how much of the bed is utilized
@@ -50,11 +54,16 @@ class Individual(object):
             util_w = part_width_mm / bed_width
             util_h = part_height_mm / bed_height
             utilizations.append(min(1.0, util_w, util_h)) # max score of 1.0
-        score_fit = float(np.mean(fits))
-        score_util = float(np.mean(utilizations))
+        
+        # If any part does not fit, override fitness to 0
+        # if any(f == 0 for f in fits):
+        #     return 0.0
+        
+        score_fit = clamp01(float(np.mean(fits)))
+        score_util = clamp01(float(np.mean(utilizations)))
 
         # Criteria 3: Minimize number of parts
-        score_parts = 1 - (num_parts / naive_max_parts)
+        score_parts = clamp01(1 - (num_parts / naive_max_parts))
         # score_parts = max(0, 1 - ( (num_parts - 1) / naive_max_parts ))
 
 
@@ -79,7 +88,7 @@ class Individual(object):
                 # clamp small numerical issues
                 pp = max(0.0, min(1.0, pp))
             pp_scores.append(pp)
-        score_compactness = float(np.mean(pp_scores))
+        score_compactness = clamp01(float(np.mean(pp_scores)))
 
         fitness = (
             score_fit * 0.5 +

@@ -11,6 +11,6 @@ echo === Installing dependencies ===
 pip install -r requirements.txt
 
 echo === Starting Flask backend ===
-python app.py
+python server.py
 
 pause

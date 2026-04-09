@@ -1,291 +1,395 @@
 import numpy as np
 import random
+from skimage.measure import label, regionprops
+from scipy.ndimage import distance_transform_edt
 
 from individual import Individual
 from problem_context import ProblemContext
 
 def find_best_cut(elevation, physical_width, physical_height, bed_width, bed_height):
-  """
-  AI evolution algorithm to find optimal partitioning of elevation map into printable segments
-  https://www.geeksforgeeks.org/dsa/genetic-algorithms/
-  """
+    """
+    AI evolution algorithm to find optimal partitioning of elevation map into printable segments
+    https://www.geeksforgeeks.org/dsa/genetic-algorithms/
+    """
 
-  # Convert elevation list to 2D numpy array
-  elevation = np.array(elevation, dtype=float)
+    # Convert elevation list to 2D numpy array
+    elevation = np.array(elevation, dtype=float)
 
-  # Initialize population
-  population = initialize_population(
-    elevation,
-    physical_width, physical_height,
-    bed_width, bed_height,
-    population_size=40,
-    jitter_amount=20    # tweak for more randomness
-  )
+    # Initialize population
+    population = initialize_population(
+        elevation,
+        physical_width, physical_height,
+        bed_width, bed_height,
+        population_size=1,
+        jitter_amount=20    # tweak for more randomness
+    )
 
-  best = evolve(
-    population,
-    # elevation,
-    # (physical_width, physical_height),
-    # (bed_width, bed_height),
-    generations=30
-  )
+    # Ensure that each partition of an individual fits within the printer bed, cutting if necessary
+    ensure_partitions_fit(population[0])
 
-  # test mutation
-  # child_map = mutate(population[0].label_map)
-  # return child_map.tolist()
+    # Evolution
+    # best = evolve(
+    #     population,
+    #     # elevation,
+    #     # (physical_width, physical_height),
+    #     # (bed_width, bed_height),
+    #     generations=30
+    # )
 
-#   # test mutate triangle cut
-  mutated_map = mutate(population[0].label_map)
-  for i in range(20):
-    mutated_map = mutate(mutated_map)
-  return mutated_map.tolist()
-  
-  return population[0].label_map.tolist()  # placeholder: return first genome as best cut
+    # test mutation
+    # child_map = mutate(population[0].label_map)
+    # return child_map.tolist()
+
+    # test mutate triangle cut
+    # mutated_map = mutate(population[0].label_map)
+    # for i in range(20):
+    #     mutated_map = mutate(mutated_map)
+    # return mutated_map.tolist()
+    
+    return population[0].label_map.tolist()  # placeholder: return first genome as best cut
 
 def initialize_population(elevation, physical_width, physical_height,
                           bed_width, bed_height, population_size=30,
                           jitter_amount=3):
-  """
-  Initialize a population of label maps with
+    """
+    Initialize a population of label maps by grouping pixels with similar slope values
+    into X number of bins. Water label = -1.
 
-  elevation: 2D numpy array (H × W) of DEM heights
-  physical_width, physical_height: size of the island in mm
-  bed_width, bed_height: printer bed dimensions in mm
-  population_size: how many genomes to create
-  jitter_amount: how much to randomly perturb boundaries (in pixels)
+    elevation: 2D numpy array (H × W) of DEM heights
+    physical_width, physical_height: size of the island in mm
+    bed_width, bed_height: printer bed dimensions in mm
+    population_size: how many genomes to create
+    jitter_amount: how much to randomly perturb boundaries (in pixels)
 
-  Returns: list of label_map arrays (each H × W, integer labels)
-  """
-  H, W = elevation.shape
+    Returns: list of label_map arrays (each H × W, integer labels)
+    """
+    H, W = elevation.shape
 
-  # Compute number of tiles that roughly match printer size (used to set target partitions)
-  tiles_x = max(1, int(np.ceil(physical_width / bed_width)))
-  tiles_y = max(1, int(np.ceil(physical_height / bed_height)))
-  target_partitions = max(1, tiles_x * tiles_y)
+    # Compute number of tiles that roughly match printer size (used to set target partitions)
+    tiles_x = max(1, int(np.ceil(physical_width / bed_width)))
+    tiles_y = max(1, int(np.ceil(physical_height / bed_height)))
+    target_partitions = max(1, tiles_x * tiles_y)
 
-  # Detect water: explicit mask for NaN, infinities, or extreme sentinel values
-  finite = np.isfinite(elevation)
-  # Many DEMs use large negative sentinel for no-data (ex: -3.4e+38)
-  sentinel_thresh = -1e30
-  water_mask = (~finite) | (elevation <= sentinel_thresh)
+    # Detect water: explicit mask for NaN, infinities, or extreme sentinel values
+    finite = np.isfinite(elevation)
+    # Many DEMs use large negative sentinel for no-data (ex: -3.4e+38)
+    sentinel_thresh = -1e30
+    water_mask = (~finite) | (elevation <= sentinel_thresh)
 
-  # Land mask (inverse of water mask)
-  land_mask = ~water_mask
-  land_pixels = int(np.count_nonzero(land_mask))
+    # Land mask (inverse of water mask)
+    land_mask = ~water_mask
+    land_pixels = int(np.count_nonzero(land_mask))
 
-  # Prepare elevation used for slope computation:
-  # replace water/sentinel cells with a median elevation to avoid huge gradients along coastlines
-  elevation_for_slope = elevation.astype(float).copy()
-  if land_pixels > 0:
-    land_median = float(np.nanmedian(elevation[land_mask])) # Compute the median elevation of land pixels only
-    elevation_for_slope[water_mask] = land_median # Replace water/sentinel cells with median
-  else:
-    # fallback: if no land, fill with zeros
-    elevation_for_slope[water_mask] = 0.0
-
-  # Compute slope (gradient magnitude) on the cleaned elevation
-  gy, gx = np.gradient(elevation_for_slope) # gy = rate of change between rows, gx = rate of change between columns
-  slope = np.hypot(gx, gy) # magnitude of change regardless of direction
-
-  # Compute the numeric range of slope values used to build slope bins, using only land pixels
-  if land_pixels == 0: # fallback: if no land
-    s_min, s_max = 0.0, 1.0
-  else:
-    s_min = float(np.nanmin(slope[land_mask])) # min slope value of land pixels
-    s_max = float(np.nanmax(slope[land_mask])) # max slope value of land pixels
-    if s_max == s_min:
-      s_max = s_min + 1e-6 # if flat terrain, add epsilon to prevent errors later on
-
-  population = []
-
-  # Helper: flood-fill connected components on boolean mask
-  # Returns a list of components, where each component is a list of (row, col) coordinates.
-  def extract_components(mask):
-    visited = np.zeros(mask.shape, dtype=bool)
-    components = []
-
-    for y in range(mask.shape[0]):
-      row = mask[y]
-      for x in range(mask.shape[1]):
-        if not row[x] or visited[y, x]:
-          continue
-        # BFS/stack flood-fill
-        stack = [(y, x)]
-        visited[y, x] = True
-        comp = []
-        while stack:
-          cy, cx = stack.pop()
-          comp.append((cy, cx))
-          # 4-neighborhood
-          if cy > 0 and mask[cy - 1, cx] and not visited[cy - 1, cx]:
-            visited[cy - 1, cx] = True
-            stack.append((cy - 1, cx))
-          if cy + 1 < mask.shape[0] and mask[cy + 1, cx] and not visited[cy + 1, cx]:
-            visited[cy + 1, cx] = True
-            stack.append((cy + 1, cx))
-          if cx > 0 and mask[cy, cx - 1] and not visited[cy, cx - 1]:
-            visited[cy, cx - 1] = True
-            stack.append((cy, cx - 1))
-          if cx + 1 < mask.shape[1] and mask[cy, cx + 1] and not visited[cy, cx + 1]:
-            visited[cy, cx + 1] = True
-            stack.append((cy, cx + 1))
-        components.append(comp)
-    return components
-
-  for _ in range(population_size):
-    # Add small per-individual noise to slope to create diversity in the population
-    noise_scale = max(1e-6, jitter_amount * 0.01 * (slope[land_mask].std() if land_pixels > 0 else 1.0))
-    noisy_slope = slope.copy()
+    # Prepare elevation used for slope computation:
+    # replace water/sentinel cells with a median elevation to avoid huge gradients along coastlines
+    elevation_for_slope = elevation.astype(float).copy()
     if land_pixels > 0:
-      noisy_slope[land_mask] = noisy_slope[land_mask] + np.random.normal(scale=noise_scale, size=noisy_slope[land_mask].shape)
-
-    # Determine number of slope bins, scaled to land area so land is subdivided
-    # num_bins is a tunable parameter
-    if land_pixels <= 500:
-      num_bins = max(4, target_partitions)
+        land_median = float(np.nanmedian(elevation[land_mask])) # Compute the median elevation of land pixels only
+        elevation_for_slope[water_mask] = land_median # Replace water/sentinel cells with median
     else:
-      num_bins = int(min(target_partitions * 6, max(target_partitions, land_pixels // 500)))
-      num_bins = max(4, num_bins)
-    # num_bins = target_partitions # intuitive, but does not work as well
+        # fallback: if no land, fill with zeros
+        elevation_for_slope[water_mask] = 0.0
 
-    # Quantize slope into bins only for land pixels
-    bin_boundaries = np.linspace(s_min, s_max, num_bins + 1) # Creates num_bins+1 evenly spaced numbers from s_min to s_max inclusive
-    bins = bin_boundaries[1:-1] # Drops the first and last values (keep internal edges)
-    quant = np.full((H, W), -1, dtype=int) # Initialize with -1, indicating not land
-    if land_pixels > 0:
-      digitized = np.digitize(noisy_slope[land_mask], bins) # Assign each land pixel to a bin index based on its slope value
-      quant[land_mask] = digitized # Fills the land pixels in the output grid with their bin values
+    # Compute slope (gradient magnitude) on the cleaned elevation
+    gy, gx = np.gradient(elevation_for_slope) # gy = rate of change between rows, gx = rate of change between columns
+    slope = np.hypot(gx, gy) # magnitude of change regardless of direction
 
-    # Create label_map by extracting connected components in each quantized land bin
-    label_map = np.full((H, W), -1, dtype=int)
-    next_label = 0
+    # Compute the numeric range of slope values used to build slope bins, using only land pixels
+    if land_pixels == 0: # fallback: if no land
+        s_min, s_max = 0.0, 1.0
+    else:
+        s_min = float(np.nanmin(slope[land_mask])) # min slope value of land pixels
+        s_max = float(np.nanmax(slope[land_mask])) # max slope value of land pixels
+        if s_max == s_min:
+            s_max = s_min + 1e-6 # if flat terrain, add epsilon to prevent errors later on
 
-    for b in range(0, num_bins):
-      mask = (quant == b) # Select pixels that belong to bin b. True if pixel belongs to bin b and False otherwise
-      if not mask.any():
-        continue
-      comps = extract_components(mask) # Find groups of connected True pixels
-      # Assign a unique label to each component
-      for comp in comps:
-        for (y, x) in comp:
-          label_map[y, x] = next_label
-        next_label += 1
+    population = []
 
-    # Assign water pixels their own special label (do not mix with land)
-    water_label = None
-    if water_mask.any():
-      water_label = next_label
-      label_map[water_mask] = water_label
-      next_label += 1
+    for _ in range(population_size):
+        # Add small per-individual noise to slope to create diversity in the population
+        noise_scale = max(1e-6, jitter_amount * 0.01 * (slope[land_mask].std() if land_pixels > 0 else 1.0))
+        noisy_slope = slope.copy()
+        if land_pixels > 0:
+            noisy_slope[land_mask] = noisy_slope[land_mask] + np.random.normal(scale=noise_scale, size=noisy_slope[land_mask].shape)
 
-    # Fallback: if any pixels remain unlabeled, assign them to nearest neighbor labels
-    unlabeled = np.where(label_map == -1)
-    if unlabeled[0].size > 0:
-      for y, x in zip(*unlabeled):
-        neigh = []
-        # Check 4 neighbors
-        for ny, nx in [(y-1,x),(y+1,x),(y,x-1),(y,x+1)]:
-          # If neighbor is within bounds and labeled, add to list
-          if 0 <= ny < H and 0 <= nx < W and label_map[ny, nx] != -1:
-            neigh.append(label_map[ny, nx])
-        if neigh: # If we found any labeled neighbors, assign the most common label among them
-          label_map[y, x] = max(set(neigh), key=neigh.count)
-        else: # If no neighbors found, assign new label
-          label_map[y, x] = next_label
-          next_label += 1
+        # Determine number of slope bins, scaled to land area so land is subdivided
+        # num_bins is a tunable parameter
+        if land_pixels <= 500:
+            num_bins = max(4, target_partitions)
+        else:
+            num_bins = int(min(target_partitions * 6, max(target_partitions, land_pixels // 500)))
+            num_bins = max(4, num_bins)
+            # num_bins = target_partitions # intuitive, but does not work as well
 
-    # Merge very small land regions into neighbor with majority adjacency to ensure printable partitions
-    min_area = max(1, (H * W) // (num_bins * 30)) # (Avg pixels per bin)/30 to remove regions much smaller than a typical partition. min_area is a tunable parameter
-    labels, counts = np.unique(label_map, return_counts=True) # Count how many pixels are in each label
-    small_labels = labels[counts < min_area] # Find labels whose size is below the threshold
-    for sl in small_labels:
-      # never merge the dedicated water label into land or vice-versa
-      if water_label is not None and sl == water_label:
-        continue
-      coords = np.where(label_map == sl)
-      if coords[0].size == 0:
-        continue
-      neighbor_counts = {} # Keep track of neighboring labels and the number of touching edges for each neighbor
-      # Scan neighbors of every pixel in the small region
-      for y, x in zip(coords[0], coords[1]):
-        for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]: # 4 neighbors
-          ny, nx = y + dy, x + dx
-          if 0 <= ny < H and 0 <= nx < W:
-            lbl = label_map[ny, nx]
-            if lbl != sl and not (water_label is not None and lbl == water_label):
-              neighbor_counts[lbl] = neighbor_counts.get(lbl, 0) + 1
-      if neighbor_counts:
-        target = max(neighbor_counts, key=neighbor_counts.get) # Picks the region that shares the most border pixels
-        label_map[coords] = target # Merge the small region into the target neighbor
+        # Quantize slope into bins only for land pixels
+        bin_boundaries = np.linspace(s_min, s_max, num_bins + 1) # Creates num_bins+1 evenly spaced numbers from s_min to s_max inclusive
+        bins = bin_boundaries[1:-1] # Drops the first and last values (keep internal edges)
+        quant = np.full((H, W), -1, dtype=int) # Initialize with -1, indicating not land
+        if land_pixels > 0:
+            digitized = np.digitize(noisy_slope[land_mask], bins) # Assign each land pixel to a bin index based on its slope value
+            quant[land_mask] = digitized # Fills the land pixels in the output grid with their bin values
 
-    # Renumber labels to be contiguous 0..N-1
-    unique = np.unique(label_map)
-    remap = {old: new for new, old in enumerate(unique)} # Create a mapping from old labels to new contiguous labels
-    for old, new in remap.items():
-      label_map[label_map == old] = new
+        # Create label_map by extracting connected components in each quantized land bin
+        label_map = np.full((H, W), -1, dtype=int)
+        next_label = 0
 
-    # Update water_label to new id if present, or None if absent
-    if water_label is not None:
-      water_label = remap.get(water_label, None)
+        for b in range(0, num_bins):
+            mask = (quant == b) # Select pixels that belong to bin b. True if pixel belongs to bin b and False otherwise
+            if not mask.any():
+                continue
+        
+            components_labeled = label(mask, connectivity=1) # Find connected components using skimage.measure.label
+            # For each component, assign a unique label to each component
+            for prop in regionprops(components_labeled):
+                coords = prop.coords
+                for (y, x) in coords:
+                    label_map[y, x] = next_label
+                next_label += 1
 
-    # Apply small jitter to boundaries for diversity
-    # Randomly sample a small fraction (boundary_frac) and reassign each chosen pixel to a random adjacent label (excluding water).
-    if jitter_amount > 0:
-      boundary_frac = min(0.02, 0.001 * jitter_amount)
-      bmask = np.zeros_like(label_map, dtype=bool)
-      for y in range(H):
-        for x in range(W):
-          lbl = label_map[y, x]
-          for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
-            ny, nx = y + dy, x + dx
-            if 0 <= ny < H and 0 <= nx < W and label_map[ny, nx] != lbl:
-              bmask[y, x] = True
-              break
-      bcoords = np.where(bmask)
-      if bcoords[0].size > 0:
-        sample_count = int(boundary_frac * bcoords[0].size)
-        if sample_count > 0:
-          idxs = np.random.choice(bcoords[0].size, sample_count, replace=False)
-          for i in idxs:
-            y = bcoords[0][i]; x = bcoords[1][i]
-            neigh = []
-            for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
-              ny, nx = y + dy, x + dx
-              if 0 <= ny < H and 0 <= nx < W and label_map[ny, nx] != label_map[y, x]:
-                if water_label is not None and label_map[ny, nx] == water_label:
-                  continue
-                neigh.append(label_map[ny, nx])
-            if neigh:
-              label_map[y, x] = random.choice(neigh)
+        # Assign water pixels their own special label (do not mix with land)
+        water_label = None
+        if water_mask.any():
+            water_label = next_label
+            label_map[water_mask] = water_label
+            next_label += 1
 
-    # Build ProblemContext and Individual
-    context = ProblemContext(
-      elevation,
-      physical_width,
-      physical_height,
-      bed_width,
-      bed_height
-    )
-    population.append(Individual(label_map, context))
+        # Fallback: if any pixels remain unlabeled, assign them to nearest neighbor labels
+        unlabeled = np.where(label_map == -1)
+        if unlabeled[0].size > 0:
+            for y, x in zip(*unlabeled):
+                neigh = []
+                # Check 4 neighbors
+                for ny, nx in [(y-1,x),(y+1,x),(y,x-1),(y,x+1)]:
+                    # If neighbor is within bounds and labeled, add to list
+                    if 0 <= ny < H and 0 <= nx < W and label_map[ny, nx] != -1:
+                        neigh.append(label_map[ny, nx])
+                if neigh: # If we found any labeled neighbors, assign the most common label among them
+                    label_map[y, x] = max(set(neigh), key=neigh.count)
+                else: # If no neighbors found, assign new label
+                    label_map[y, x] = next_label
+                    next_label += 1
 
-  return population
+        # Merge very small land regions into neighbor with majority adjacency to ensure printable partitions
+        min_area = max(1, (H * W) // (num_bins * 30)) # (Avg pixels per bin)/30 to remove regions much smaller than a typical partition. min_area is a tunable parameter
+        labels, counts = np.unique(label_map, return_counts=True) # Count how many pixels are in each label
+        small_labels = labels[counts < min_area] # Find labels whose size is below the threshold
+        for sl in small_labels:
+            # never merge the dedicated water label into land or vice-versa
+            if water_label is not None and sl == water_label:
+                continue
+            coords = np.where(label_map == sl)
+            if coords[0].size == 0:
+                continue
+            neighbor_counts = {} # Keep track of neighboring labels and the number of touching edges for each neighbor
+            # Scan neighbors of every pixel in the small region
+            for y, x in zip(coords[0], coords[1]):
+                for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]: # 4 neighbors
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < H and 0 <= nx < W:
+                        lbl = label_map[ny, nx]
+                        if lbl != sl and not (water_label is not None and lbl == water_label):
+                            neighbor_counts[lbl] = neighbor_counts.get(lbl, 0) + 1
+            if neighbor_counts:
+                target = max(neighbor_counts, key=neighbor_counts.get) # Picks the region that shares the most border pixels
+                label_map[coords] = target # Merge the small region into the target neighbor
 
-def mutate(label_map, p_shift=0.5, p_jitter=0.2, p_merge=0.15, p_split=0.10):
-  r = np.random.rand()
+        # Ensure water pixels are represented by -1 and excluded from renumbering of land labels
+        if water_mask.any():
+            label_map[water_mask] = -1
+            water_label = -1
+        else:
+            water_label = None
 
-  if r < p_split:
-    return mutate_split_region(label_map)
-  elif r < p_merge:
-    return mutate_merge_regions(label_map)
-  elif r < p_jitter:
-    return mutate_triangle_cut(label_map)
-  else:
-    return mutate_boundary_shift(label_map)
+        # Renumber labels to be contiguous 0..N-1 (except water, which is -1)
+        unique_land = np.unique(label_map)
+        unique_land = unique_land[unique_land != -1] # Exclude water label
+        remap = {old: new for new, old in enumerate(unique_land)} # Create a mapping from old labels to new contiguous labels
+        for old, new in remap.items():
+            label_map[label_map == old] = new
 
-#   return mutate_boundary_shift(label_map)
-#   return mutate_triangle_cut(label_map)
-#   return mutate_merge_regions(label_map)
-  # return mutate_split_region(label_map)
+        # Update water_label to new id if present, or None if absent
+        if water_label is not None:
+            water_label = remap.get(water_label, None)
+
+        # Apply small jitter to boundaries for diversity
+        # Randomly sample a small fraction (boundary_frac) and reassign each chosen pixel to a random adjacent label (excluding water).
+        if jitter_amount > 0:
+            boundary_frac = min(0.02, 0.001 * jitter_amount)
+            bmask = np.zeros_like(label_map, dtype=bool)
+            for y in range(H):
+                for x in range(W):
+                    lbl = label_map[y, x]
+                    for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        ny, nx = y + dy, x + dx
+                        if 0 <= ny < H and 0 <= nx < W and label_map[ny, nx] != lbl:
+                            bmask[y, x] = True
+                            break
+            bcoords = np.where(bmask)
+            if bcoords[0].size > 0:
+                sample_count = int(boundary_frac * bcoords[0].size)
+                if sample_count > 0:
+                    idxs = np.random.choice(bcoords[0].size, sample_count, replace=False)
+                    for i in idxs:
+                        y = bcoords[0][i]; x = bcoords[1][i]
+                        neigh = []
+                        for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
+                            ny, nx = y + dy, x + dx
+                            if 0 <= ny < H and 0 <= nx < W and label_map[ny, nx] != label_map[y, x]:
+                                if water_label is not None and label_map[ny, nx] == water_label:
+                                    continue
+                                neigh.append(label_map[ny, nx])
+                        if neigh:
+                            label_map[y, x] = random.choice(neigh)
+
+        # Build ProblemContext and Individual
+        context = ProblemContext(
+        elevation,
+        physical_width,
+        physical_height,
+        bed_width,
+        bed_height
+        )
+        population.append(Individual(label_map, context))
+
+    return population
+
+def ensure_partitions_fit(individual: Individual, max_iters: int = 100):
+    """
+    Ensure every partition in 'individual.label_map' can fit within the printer bed.
+    If a partition doesn't fit, iteratively split it in half along the longer dimension
+    (in pixels) until both halves fit or max_iters is reached.
+
+    The function mutates individual.label_map in-place and also returns the updated map.
+
+    Rules:
+    - Water label (-1) is skipped.
+    - A part is considered fitting if it fits either in (bed_width, bed_height)
+      or when rotated (bed_height, bed_width).
+    - Splits are done using simple bbox-midpoint column/row splits with small
+      adjustments to avoid empty halves.
+    """
+    label_map = individual.label_map
+    ctx = individual.context
+    H, W = label_map.shape
+
+    physical_width = ctx.physical_width
+    physical_height = ctx.physical_height
+    bed_width = ctx.bed_width
+    bed_height = ctx.bed_height
+
+    # pixel --> mm conversion
+    width_per_pixel_mm = float(physical_width) / float(W)
+    height_per_pixel_mm = float(physical_height) / float(H)
+
+    def part_fits(xmin, xmax, ymin, ymax):
+        pw_mm = (xmax - xmin) * width_per_pixel_mm
+        ph_mm = (ymax - ymin) * height_per_pixel_mm
+        # check normal orientation or rotated
+        return (pw_mm <= bed_width and ph_mm <= bed_height) or (pw_mm <= bed_height and ph_mm <= bed_width)
+
+    it = 0
+    while it < max_iters:
+        it += 1
+        made_change = False
+
+        labels = np.unique(label_map)
+        # skip water label -1
+        labels = labels[labels != -1]
+
+        # for each partition...
+        for lbl in labels:
+            mask = (label_map == lbl)
+            if not mask.any():
+                continue
+
+            ys, xs = np.where(mask)
+            xmin, xmax = xs.min(), xs.max() + 1  # xmax exclusive
+            ymin, ymax = ys.min(), ys.max() + 1  # ymax exclusive
+
+            if part_fits(xmin, xmax, ymin, ymax):
+                print(lbl, " part fits")
+                continue  # this part fits
+            print(lbl, " part does not fit")
+            # determine split axis by pixel extent (prefer splitting the longer side)
+            width_px = xmax - xmin
+            height_px = ymax - ymin
+            split_axis = 'vertical' if width_px >= height_px else 'horizontal'
+
+            split_success = False
+
+            # try splitting along chosen axis; if fails, try the other axis
+            for axis_try in (split_axis, 'horizontal' if split_axis == 'vertical' else 'vertical'):
+                if axis_try == 'vertical' and width_px >= 2:
+                    # allowed split columns are inside bounding box: xmin+1 .. xmax-1
+                    mid = (xmin + xmax) // 2
+                    # try center first, then expand outward
+                    candidates = [mid] + [mid + d for d in range(1, (width_px // 2) + 1)] + [mid - d for d in range(1, (width_px // 2) + 1)]
+                    for split_col in candidates:
+                        if split_col <= xmin or split_col >= xmax:
+                            continue
+                        left_mask = mask & (np.arange(W)[None, :] <= split_col - 1)
+                        right_mask = mask & (np.arange(W)[None, :] >= split_col)
+                        if left_mask.any() and right_mask.any():
+                            # assign right half a new label
+                            new_label = int(label_map.max()) + 1
+                            label_map[right_mask] = new_label
+                            made_change = True
+                            split_success = True
+                            break
+                    if split_success:
+                        break
+
+                elif axis_try == 'horizontal' and height_px >= 2:
+                    mid = (ymin + ymax) // 2
+                    candidates = [mid] + [mid + d for d in range(1, (height_px // 2) + 1)] + [mid - d for d in range(1, (height_px // 2) + 1)]
+                    for split_row in candidates:
+                        if split_row <= ymin or split_row >= ymax:
+                            continue
+                        top_mask = mask & (np.arange(H)[:, None] <= split_row - 1)
+                        bottom_mask = mask & (np.arange(H)[:, None] >= split_row)
+                        if top_mask.any() and bottom_mask.any():
+                            new_label = int(label_map.max()) + 1
+                            label_map[bottom_mask] = new_label
+                            made_change = True
+                            split_success = True
+                            break
+                    if split_success:
+                        break
+
+            # If we couldn't split this region (rare), leave it and continue to next label
+            # Continue scanning other labels; further iterations may allow different splits
+            # If a split was made, break to restart scanning labels from top (because label set changed)
+            if made_change:
+                break
+
+        if not made_change:
+            break
+
+    # update individual's map and return it
+    individual.label_map = label_map
+    return label_map
+
+def mutate(label_map, elevation=None, p_shift=0.5, p_jitter=0.2, p_merge=0.15, p_split=0.10):
+    r = np.random.rand()
+
+    if r > 0.5:
+        return mutate_merge_regions(label_map)
+    else:
+        return mutate_split_region(label_map, elevation=elevation)
+
+    # if r < p_split:
+    #   return mutate_split_region(label_map)
+    # elif r < p_merge:
+    #   return mutate_merge_regions(label_map)
+    # elif r < p_jitter:
+    #   return mutate_triangle_cut(label_map)
+    # else:
+    #   return mutate_boundary_shift(label_map)
+
+    # return mutate_boundary_shift(label_map)
+    # return mutate_triangle_cut(label_map)
+    # return mutate_merge_regions(label_map)
+    # return mutate_split_region(label_map, elevation=elevation)
 
 def region_bounding_boxes(label_map):
     """
@@ -539,87 +643,139 @@ def mutate_triangle_cut(label_map):
 
 def mutate_merge_regions(label_map):
     """
-    Merges two adjacent regions in the label map.
+    Merge two randomly chosen neighboring regions (non-water) into one.
+
     """
     mutated = label_map.copy()
-    labels = np.unique(mutated)
+    H, W = mutated.shape
 
-    if len(labels) < 2:
+    # Get all non-water labels
+    all_labels = np.unique(mutated)
+    land_labels = all_labels[all_labels != -1]
+
+    # Not enough land regions to merge
+    if len(land_labels) < 2:
         return mutated
 
-    a = np.random.choice(labels)
+    # Pick a random land region
+    a = np.random.choice(land_labels)
 
+    # Find all land neighbors of region "a" via pixel adjacency
     ys, xs = np.where(mutated == a)
     neighbors = set()
-
     for y, x in zip(ys, xs):
         for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
             ny, nx = y + dy, x + dx
-            if 0 <= ny < mutated.shape[0] and 0 <= nx < mutated.shape[1]:
+            if 0 <= ny < H and 0 <= nx < W:
                 b = mutated[ny, nx]
-                if b != a:
+                if b != a and b != -1: # different region and not water
                     neighbors.add(b)
-
     if not neighbors:
-        return mutated
+        return mutated # region "a" has no land neighbors
 
+    # Pick a random land neighbor and merge it into region "a"
     b = np.random.choice(list(neighbors))
     mutated[mutated == b] = a
 
     return mutated
 
-def mutate_split_region(label_map):
+def mutate_split_region(label_map, elevation=None):
     """
-    Split a single region into two regions by a straight cut.
-
-    The split is either:
-    - vertical (left/right)
-    - horizontal (top/bottom)
+    Split a single region into two regions based on elevation
     """
     mutated = label_map.copy()
-    bboxes = region_bounding_boxes(mutated)
+    H, W = mutated.shape
 
-    # Randomly choose a region to split
-    label = np.random.choice(list(bboxes.keys()))
-    x0, x1, y0, y1 = bboxes[label]
+    # Collect non-water labels with enough pixels to split
+    all_labels, counts = np.unique(mutated, return_counts=True)
+    splittable = []
+    for lbl, count in zip(all_labels, counts):
+        if lbl != -1 and count >= 20:
+            splittable.append(lbl)
 
-    # Compute region width and height
-    width = x1 - x0
-    height = y1 - y0
-
-    # Determine which split directions are possible
-    can_split_vertically = width >= 4
-    can_split_horizontally = height >= 4
-
-    # If neither split is possible, abort mutation
-    if not can_split_vertically and not can_split_horizontally:
+    if not splittable:
         return mutated
+    
+    # Pick a random non-water region to split
+    chosen = np.random.choice(splittable)
+    region_mask = mutated == chosen
+    region_coords = np.argwhere(region_mask)  # (N, 2): rows are (y, x)
+    region_size = len(region_coords)
 
-    # Assign a new label for the split-off region
-    new_label = mutated.max() + 1
+    # Elevation-guided split
+    if elevation is not None:
+        # Clean elevation: replace non-finite or extreme sentinel values with land median
+        # Detect water: explicit mask for NaN, infinities, or extreme sentinel values
+        finite = np.isfinite(elevation)
+        sentinel_thresh = -1e30
+        water_mask = (~finite) | (elevation <= sentinel_thresh)
+        # Land mask (inverse of water mask)
+        land_mask = ~water_mask
+        land_pixels = int(np.count_nonzero(land_mask))
+        # Prepare elevation used for slope computation:
+        # replace water/sentinel cells with a median elevation to avoid huge gradients along coastlines
+        elevation_for_slope = elevation.astype(float).copy()
+        if land_pixels > 0:
+            land_median = float(np.nanmedian(elevation[land_mask])) # Compute the median elevation of land pixels only
+            elevation_for_slope[water_mask] = land_median # Replace water/sentinel cells with median
 
-    # Choose a valid split direction
-    if can_split_vertically and can_split_horizontally:
-        split_vertically = np.random.rand() < 0.5
+        # Compute slope (gradient magnitude) on the full elevation grid
+        gy, gx = np.gradient(elevation_for_slope.astype(float))
+        slope = np.hypot(gx, gy)
+
+        # Extract slope values for pixels in this region
+        region_slope = slope[region_mask]
+
+        # Split threshold: median with a small random jitter for diversity
+        # (jitter is +-10% of the region's slope median)
+        print("slope min-max", region_slope.min(), region_slope.max())
+        jitter = np.random.uniform(-0.1, 0.1) * np.median(region_slope)
+        threshold = float(np.median(region_slope)) + jitter
+        print("threshold", threshold)
+
+        # Partition the region mask into low-slope and high-slope halves
+        low_mask = region_mask & (slope <  threshold)
+        high_mask = region_mask & (slope >= threshold)
+
+        def largest_component(mask):
+            """Return a boolean mask of only the largest connected component."""
+            if not mask.any():
+                return mask
+            labeled = label(mask, connectivity=1)
+            component_ids, component_sizes = np.unique(labeled[labeled > 0], return_counts=True)
+            if len(component_ids) == 0:
+                return mask
+            best = component_ids[np.argmax(component_sizes)]
+            return labeled == best
+
+        # Ensure regions are continuous
+        low_mask = largest_component(low_mask)
+        high_mask = largest_component(high_mask)
+
+        # Pixels inside region_mask that were dropped by largest-component
+        # get reassigned to whichever mask is spatially nearest
+        leftovers = region_mask & ~low_mask & ~high_mask
+        if leftovers.any() and low_mask.any() and high_mask.any():
+            dist_to_low  = distance_transform_edt(~low_mask)
+            dist_to_high = distance_transform_edt(~high_mask)
+            go_to_high = leftovers & (dist_to_high <= dist_to_low)
+            go_to_low  = leftovers & (dist_to_high >  dist_to_low)
+            low_mask  = low_mask  | go_to_low
+            high_mask = high_mask | go_to_high
+
+        # Both halves must have at least 5 pixels for a valid split
+        if low_mask.sum() >= 5 and high_mask.sum() >= 5:
+            new_label = int(mutated.max()) + 1
+            mutated[high_mask] = new_label
+            print(f"Split region {chosen} of size {region_size}: {low_mask.sum()} pixels in low half, {high_mask.sum()} pixels in high half.")
+            return mutated
+        else:
+            print("Elevation-guided split failed.")
+            print(f"Region {chosen} size: {region_size}, low half: {low_mask.sum()} pixels, high half: {high_mask.sum()} pixels")
+            return mutated
     else:
-        split_vertically = can_split_vertically
-
-    if split_vertically:
-        # Vertical split: cut along x direction
-        # Ensure at least 2 pixels on both sides
-        split_x = np.random.randint(x0 + 2, x1 - 1)
-
-        # Right side becomes new region
-        mutated[y0:y1, split_x:x1] = new_label
-
-    else:
-        # Horizontal split: cut along y direction
-        split_y = np.random.randint(y0 + 2, y1 - 1)
-
-        # Bottom side becomes new region
-        mutated[split_y:y1, x0:x1] = new_label
-
-    return mutated
+        print("Elevation-guided split failed.")
+        return mutated
 
 
 # Evolution loop
@@ -645,7 +801,7 @@ def evolve(population, generations=200, on_generation=None):
         children = []
         for _ in range(num_children):
             parent = select_parent(population)
-            mutated_map = mutate(parent.label_map)
+            mutated_map = mutate(parent.label_map, elevation=parent.context.elevation)
             child = Individual(mutated_map, parent.context)
             children.append(child)
 
