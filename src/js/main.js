@@ -1,6 +1,14 @@
 // Call sendMeshToBackend(meshData) when data is ready to be sent to backend for AI processing
 export async function sendMeshToBackend(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight) {
-  const result = await fetch('http://localhost:5000/api/process', {
+  let API_BASE;
+  if (window.location.hostname === "localhost") {
+    API_BASE = "http://localhost:5000";
+  }
+  else {
+    API_BASE = "http://149.165.172.71:5000";
+  }
+  
+  const result = await fetch(`${API_BASE}/api/process`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight })
