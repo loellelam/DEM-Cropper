@@ -5,7 +5,7 @@ export async function sendMeshToBackend(maskedElevation2D, physicalWidth, physic
     API_BASE = "http://localhost:5000";
   }
   else {
-    API_BASE = "http://149.165.172.71:5000";
+    API_BASE = "https://loelle-dem-cropper.cis230038.projects.jetstream-cloud.org";
   }
   
   const result = await fetch(`${API_BASE}/api/process`, {
