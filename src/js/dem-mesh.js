@@ -267,9 +267,12 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m, physicalWidth, ph
     const x_count = parseInt(grid_x); 
     const y_count = parseInt(grid_y);
 
+    // Calculate scaling factors to accomodate geospatial skew
+    const { scaleX, scaleY } = getScaleFactors(physicalWidth, physicalHeight);
+
     // should represent the physical size (in mm) of each pixel in the mesh
-    const x_step = physicalWidth / x_count;   // 1 unit = 1 mm
-    const y_step = physicalHeight / y_count;  // 1 unit = 1 mm
+    const x_step = (scaleX * x_count) / physicalWidth;   // 1 unit = 1 mm
+    const y_step = (scaleY * y_count) / physicalHeight;  // 1 unit = 1 mm
 
     let geometries_array = [];
 
@@ -727,6 +730,26 @@ function degreesToMeters(degrees, latitude) {
   return {
     x: Math.abs(degrees.x) * metersPerDegreeLon,
     y: Math.abs(degrees.y) * metersPerDegreeLat
+  };
+}
+
+function getScaleFactors(physicalWidth, physicalHeight) {
+  const selectedGeotiff = getSelectedGeotiff();
+  if (!selectedGeotiff) return 1;
+  const georaster = selectedGeotiff.georasters[0];
+
+  const centerLat = (georaster.ymin + georaster.ymax) / 2;
+  const circumference = 40075017;
+  const metersPerDegreeLat = 111320;
+  const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat * Math.PI / 180) / 360);
+  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLat;
+  const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLon;
+  const demWidth = metersPerWidthPixel * georaster.width;
+  const demHeight = metersPerHeightPixel * georaster.height;
+
+  return {
+    scaleX: physicalWidth / demWidth,
+    scaleY: physicalHeight / demHeight
   };
 }
 
