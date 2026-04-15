@@ -214,8 +214,6 @@ export async function generateDEM() {
 
   // console.log("Tiles X:", tilesX, "Tiles Y:", tilesY);
 
-  console.log("physicalWidth:", physicalWidth, "physicalHeight:", physicalHeight);
-
 
   // createMesh(base, shapeWidthPixels, shapeHeightPixels, myElevation, myMask, physicalWidth, physicalHeight);
   

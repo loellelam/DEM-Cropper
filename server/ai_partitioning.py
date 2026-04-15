@@ -27,6 +27,12 @@ def find_best_cut(elevation, physical_width, physical_height, bed_width, bed_hei
     # Ensure that each partition of an individual fits within the printer bed, cutting if necessary
     ensure_partitions_fit(population[0])
 
+    # Create new labels for non-contiguous regions
+    ensure_contiguous_partitions(population[0])
+
+    # Merge small partitions
+    merge_small_partitions(population[0])
+
     # Evolution
     # best = evolve(
     #     population,
@@ -307,9 +313,7 @@ def ensure_partitions_fit(individual: Individual, max_iters: int = 100):
             ymin, ymax = ys.min(), ys.max() + 1  # ymax exclusive
 
             if part_fits(xmin, xmax, ymin, ymax):
-                print(lbl, " part fits")
-                continue  # this part fits
-            print(lbl, " part does not fit")
+                continue  # this part fits, no changes needed
             # determine split axis by pixel extent (prefer splitting the longer side)
             width_px = xmax - xmin
             height_px = ymax - ymin
@@ -366,6 +370,179 @@ def ensure_partitions_fit(individual: Individual, max_iters: int = 100):
             break
 
     # update individual's map and return it
+    individual.label_map = label_map
+    return label_map
+
+def ensure_contiguous_partitions(individual: Individual):
+    """
+    Ensure that each label corresponds to a single connected region.
+
+    If a label contains multiple disconnected components,
+    split them into separate labels.
+    """
+    # Work on a copy to avoid modifying input directly
+    new_map = individual.label_map.copy()
+
+    # Track the next available label
+    next_label = new_map.max() + 1
+
+    # Iterate over all labels (excluding water if using -1)
+    labels = np.unique(new_map)
+
+    for lbl in labels:
+        if lbl == -1:
+            continue  # skip water / background if applicable
+
+        # create mask for this label
+        mask = (new_map == lbl)
+
+        # find connected components within this label
+        # connectivity=1 → 4-connectivity (safer for grid partitions)
+        components = label(mask, connectivity=1)
+
+        num_components = components.max()
+
+        # If more than 1 component, then it is not contiguous. split into separate labels
+        if num_components > 1:
+            # Keep the first component as the original label, assign new labels to the rest
+            for comp_id in range(2, num_components + 1):
+                new_map[components == comp_id] = next_label
+                next_label += 1
+
+    individual.label_map = new_map
+    return new_map
+
+def merge_small_partitions(individual: Individual, area_fraction: float = 0.5) -> np.ndarray:
+    """
+    Merge partitions whose bounding box is smaller than a fraction of the printer bed
+    into their most-adjacent neighbor.
+
+    A partition is considered "small" if BOTH of the following hold:
+      - its pixel width  < area_fraction * (bed_width  / physical_width  * W)
+      - its pixel height < area_fraction * (bed_height / physical_height * H)
+
+    i.e. it could fit inside half the bed in both dimensions simultaneously.
+    Water label (-1) is never merged or used as a merge target.
+
+    Merging is repeated until no more small partitions remain (cascade merges are
+    handled naturally since the loop restarts after every merge).
+
+    Args:
+        individual:     Individual whose label_map is mutated in-place.
+        area_fraction:  Fraction of bed dimensions used as the smallness threshold.
+                        Default 0.5 = "less than half a bed side".
+
+    Returns:
+        The updated label_map (also mutated on individual).
+    """
+    label_map = individual.label_map
+    ctx = individual.context
+    H, W = label_map.shape
+
+    # convert physical dimensions to pixel scale
+    px_per_mm_x = W / ctx.physical_width
+    px_per_mm_y = H / ctx.physical_height
+
+    # thresholds in pixels
+    bed_w_px = area_fraction * ctx.bed_width  * px_per_mm_x
+    bed_h_px = area_fraction * ctx.bed_height * px_per_mm_y
+
+    full_bed_w_px = ctx.bed_width  * px_per_mm_x
+    full_bed_h_px = ctx.bed_height * px_per_mm_y
+
+    # helper: does bbox fit in printer bed?
+    def fits_in_bed(bbox):
+        minr, minc, maxr, maxc = bbox
+        span_x = maxc - minc
+        span_y = maxr - minr
+
+        normal  = span_x <= full_bed_w_px and span_y <= full_bed_h_px
+        rotated = span_x <= full_bed_h_px and span_y <= full_bed_w_px
+
+        return normal or rotated
+
+    # helper: is region "small"?
+    def is_small(bbox):
+        minr, minc, maxr, maxc = bbox
+        return (maxc - minc) < bed_w_px and (maxr - minr) < bed_h_px
+
+    # helper: find neighbors via border contact
+    def neighbors_by_border(lbl):
+        """
+        Count shared border pixels with neighbors.
+        """
+        coords = np.where(label_map == lbl)
+        neighbor_counts = {}
+
+        for y, x in zip(coords[0], coords[1]):
+            for dy, dx in ((-1,0),(1,0),(0,-1),(0,1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < H and 0 <= nx < W:
+                    nb = label_map[ny, nx]
+                    if nb != lbl and nb != -1:
+                        neighbor_counts[nb] = neighbor_counts.get(nb, 0) + 1
+
+        return sorted(neighbor_counts, key=neighbor_counts.get, reverse=True)
+
+    # main iterative merge loop
+    changed = True
+    while changed:
+        changed = False
+
+        # find all unique labels (excluding water)
+        unique_labels = np.unique(label_map)
+        unique_labels = unique_labels[unique_labels != -1]
+        if len(unique_labels) == 0:
+            break
+
+        # remap labels to positive ints for regionprops (original labels --> 1..N)
+        label_to_idx = {lbl: i+1 for i, lbl in enumerate(unique_labels)}
+        idx_to_label = {i+1: lbl for i, lbl in enumerate(unique_labels)}
+
+        relabeled = np.zeros_like(label_map, dtype=int)
+
+        for lbl, idx in label_to_idx.items():
+            relabeled[label_map == lbl] = idx
+
+        # compute region properties
+        props = regionprops(relabeled)
+
+        for region in props:
+            lbl = idx_to_label[region.label] # map back to original label
+            bbox = region.bbox # (min_row, min_col, max_row, max_col)
+
+            if not is_small(bbox):
+                continue
+
+            # try merging with neighbors
+            merged = False
+            for candidate in neighbors_by_border(lbl):
+                candidate_mask = (label_map == candidate)
+                if not np.any(candidate_mask):
+                    continue
+
+                # get candidate bbox
+                ys, xs = np.where(candidate_mask)
+                cbbox = (ys.min(), xs.min(), ys.max()+1, xs.max()+1)
+
+                # union bbox
+                minr = min(bbox[0], cbbox[0])
+                minc = min(bbox[1], cbbox[1])
+                maxr = max(bbox[2], cbbox[2])
+                maxc = max(bbox[3], cbbox[3])
+                union = (minr, minc, maxr, maxc)
+
+                # check if union of the two bboxes fits in the bed
+                if fits_in_bed(union):
+                    # perform merge
+                    label_map[label_map == lbl] = candidate
+                    changed = True
+                    merged = True
+                    break
+
+            if merged:
+                break  # restart after modification
+
     individual.label_map = label_map
     return label_map
 
