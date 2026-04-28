@@ -267,12 +267,15 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m, physicalWidth, ph
     const x_count = parseInt(grid_x); 
     const y_count = parseInt(grid_y);
 
-    // Calculate scaling factors to accomodate geospatial skew
-    const { scaleX, scaleY } = getScaleFactors(physicalWidth, physicalHeight);
-
     // should represent the physical size (in mm) of each pixel in the mesh
-    const x_step = (scaleX * x_count) / physicalWidth;   // 1 unit = 1 mm
-    const y_step = (scaleY * y_count) / physicalHeight;  // 1 unit = 1 mm
+    const x_step = physicalWidth / x_count;   // 1 unit = 1 mm
+    const y_step = physicalHeight / y_count;  // 1 unit = 1 mm
+
+    // Calculate scaling factors to accomodate geospatial skew
+    // const { scaleX, scaleY } = getScaleFactors(physicalWidth, physicalHeight);
+    // should represent the physical size (in mm) of each pixel in the mesh
+    // const x_step = (scaleX * x_count) / physicalWidth;   // 1 unit = 1 mm
+    // const y_step = (scaleY * y_count) / physicalHeight;  // 1 unit = 1 mm
 
     let geometries_array = [];
 
