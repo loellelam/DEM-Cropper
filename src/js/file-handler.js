@@ -11,8 +11,16 @@ export function fileHandler() {
 
   document.getElementById("tiffUpload").addEventListener("change", function (event) {
     const file = event.target.files[0];
+    const tiffInput = document.getElementById("tiffUpload");
+    const tiffLabel = document.querySelector('label[for="tiffUpload"]');
+
 
     if (file) {
+      const origLabelHTML = tiffLabel.innerHTML;
+      // Show uploading state
+      tiffInput.disabled = true;
+      tiffLabel.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+
       const reader = new FileReader();
 
       reader.onload = function (e) {
@@ -47,6 +55,10 @@ export function fileHandler() {
           map.fitBounds(tiffLayer.getBounds()); // Fit map to the new TIFF layer
 
           addTiffToHistory(tiffLayer, file.name, "geotiffHistory"); // Add to upload history
+
+          // Restore HTML button label
+          tiffInput.disabled = false;
+          tiffLabel.innerHTML = origLabelHTML;
         });
       };
 

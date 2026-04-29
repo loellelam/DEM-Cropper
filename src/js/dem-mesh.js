@@ -216,30 +216,38 @@ export async function generateDEM() {
 
 
   // createMesh(base, shapeWidthPixels, shapeHeightPixels, myElevation, myMask, physicalWidth, physicalHeight);
-  
-  // Use selectedElevation and selectedMask in createMesh
-  createMesh(base, grid_x, grid_y, myElevation, myMask, physicalWidth, physicalHeight);
-  
   // const mesh = createMeshTiles(base, grid_x, grid_y, myElevation, myMask, physicalWidth, physicalHeight, tilesX, tilesY, bedWidth, bedHeight);
 
-  centerMesh();
-  scaleByDemDimensions();
-  centerMesh();
-  const ratio = calculateRatio();
-  scaleByTargetDimensions(ratio);
-  centerMesh();
-  singletonMesh.updateMatrixWorld();
+  if (physicalWidth <= bedWidth && physicalHeight <= bedHeight) { // no partitioning needed
+    // Use selectedElevation and selectedMask in createMesh
+    createMesh(base, grid_x, grid_y, myElevation, myMask, physicalWidth, physicalHeight);
+    
+    centerMesh();
+    scaleByDemDimensions();
+    centerMesh();
+    const ratio = calculateRatio();
+    scaleByTargetDimensions(ratio);
+    centerMesh();
+    singletonMesh.updateMatrixWorld();
+  }
+  else { // partitioning needed
+    // Send mesh data to backend for processing
+    const maskedElevation = applyMaskToElevation(myElevation, myMask);
+    const maskedElevation2D = convertElevationInto2DArray(maskedElevation, grid_x, grid_y);
+    // const naiveCutsX = Math.max(1, Math.ceil(physicalWidth / bedWidth));
+    // const naiveCutsY = Math.max(1, Math.ceil(physicalHeight / bedHeight));
+    let result = await sendMeshToBackend(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight);
+    const best_cut = result.best_cut;
 
-  // Send mesh data to backend for processing
-  const maskedElevation = applyMaskToElevation(myElevation, myMask);
-  const maskedElevation2D = convertElevationInto2DArray(maskedElevation, grid_x, grid_y);
-  // const naiveCutsX = Math.max(1, Math.ceil(physicalWidth / bedWidth));
-  // const naiveCutsY = Math.max(1, Math.ceil(physicalHeight / bedHeight));
-  let result = await sendMeshToBackend(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight);
-  const best_cut = result.best_cut;
+    createMeshesFromLabelMap(best_cut, maskedElevation, grid_x, grid_y, physicalWidth, physicalHeight, base);
+  }
+  
+  
+  
 
-  createMeshesFromLabelMap(best_cut, maskedElevation, grid_x, grid_y, physicalWidth, physicalHeight, base);
+  
 
+  
   // let x_coord = 10;
   // const { leftMesh, rightMesh } = cutMeshWithPlane(x_coord);
 
