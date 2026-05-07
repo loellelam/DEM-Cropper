@@ -21,7 +21,7 @@ export const { scene, camera, renderer } = setupScene();
 // Three.js scene setup
 function setupScene() {
   const scene = new THREE.Scene();
-  scene.add(new THREE.AxesHelper(1000));
+  // scene.add(new THREE.AxesHelper(1000));
 
   const gridSize = 1000;
   const gridDivisions = 100;
@@ -30,7 +30,8 @@ function setupScene() {
   scene.add(gridHelper);
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-  camera.position.z = 100;
+  camera.position.y = 70;
+  camera.position.z = 70;
 
   const renderer = new THREE.WebGLRenderer();
 
@@ -217,29 +218,31 @@ export async function generateDEM() {
 
   // createMesh(base, shapeWidthPixels, shapeHeightPixels, myElevation, myMask, physicalWidth, physicalHeight);
   // const mesh = createMeshTiles(base, grid_x, grid_y, myElevation, myMask, physicalWidth, physicalHeight, tilesX, tilesY, bedWidth, bedHeight);
+  let { scaleRatioX, scaleRatioY } = getScaleFactors(physicalWidth, physicalHeight);
+  const x_step = (scaleRatioX * 100 * grid_x) / physicalWidth;   // 1 unit = 1 mm
+  const y_step = (scaleRatioY * 100 * grid_y) / physicalHeight;
 
   if (physicalWidth <= bedWidth && physicalHeight <= bedHeight) { // no partitioning needed
     // Use selectedElevation and selectedMask in createMesh
     createMesh(base, grid_x, grid_y, myElevation, myMask, physicalWidth, physicalHeight);
     
-    centerMesh();
-    scaleByDemDimensions();
-    centerMesh();
-    const ratio = calculateRatio();
-    scaleByTargetDimensions(ratio);
-    centerMesh();
-    singletonMesh.updateMatrixWorld();
+    centerSingletonMesh();
+    // scaleByDemDimensions();
+    // centerMesh();
+    // const ratio = calculateRatio();
+    // scaleByTargetDimensions(ratio);
+    // centerMesh();
+    // singletonMesh.updateMatrixWorld();
   }
   else { // partitioning needed
     // Send mesh data to backend for processing
     const maskedElevation = applyMaskToElevation(myElevation, myMask);
     const maskedElevation2D = convertElevationInto2DArray(maskedElevation, grid_x, grid_y);
-    // const naiveCutsX = Math.max(1, Math.ceil(physicalWidth / bedWidth));
-    // const naiveCutsY = Math.max(1, Math.ceil(physicalHeight / bedHeight));
     let result = await sendMeshToBackend(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight);
     const best_cut = result.best_cut;
 
     createMeshesFromLabelMap(best_cut, maskedElevation, grid_x, grid_y, physicalWidth, physicalHeight, base);
+    centerPartitionedMeshes();
   }
   
   
@@ -276,14 +279,15 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m, physicalWidth, ph
     const y_count = parseInt(grid_y);
 
     // should represent the physical size (in mm) of each pixel in the mesh
-    const x_step = physicalWidth / x_count;   // 1 unit = 1 mm
-    const y_step = physicalHeight / y_count;  // 1 unit = 1 mm
+    let x_step = physicalWidth / x_count;   // 1 unit = 1 mm
+    let y_step = physicalHeight / y_count;  // 1 unit = 1 mm
 
     // Calculate scaling factors to accomodate geospatial skew
-    // const { scaleX, scaleY } = getScaleFactors(physicalWidth, physicalHeight);
+    let { scaleX, scaleY } = getScaleFactors(physicalWidth, physicalHeight);
     // should represent the physical size (in mm) of each pixel in the mesh
-    // const x_step = (scaleX * x_count) / physicalWidth;   // 1 unit = 1 mm
-    // const y_step = (scaleY * y_count) / physicalHeight;  // 1 unit = 1 mm
+    // multiply scale factors by 100 because they're very small numbers
+    x_step = (scaleX * 100 * x_count) / physicalWidth;   // 1 unit = 1 mm
+    y_step = (scaleY * 100 * y_count) / physicalHeight;  // 1 unit = 1 mm
 
     let geometries_array = [];
 
@@ -380,10 +384,11 @@ function createMesh(base, grid_x, grid_y, elevation_m, mask_m, physicalWidth, ph
 
     // merging the geometries
     let mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries_array);
-    var mergedMaterial = new THREE.MeshStandardMaterial( { color: 0xcccccc, side: THREE.DoubleSide } );
+    const color = new THREE.Color().setHSL((0 * 0.618033988749895) % 1, 0.5, 0.5);
+    let mergedMaterial = new THREE.MeshStandardMaterial( { color: color, side: THREE.DoubleSide } );
     mergedMaterial.needsUpdate = true;
 
-    var mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
+    let mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
     mergedMesh.rotateX(3*Math.PI / 2)
     singletonMesh = mergedMesh;
 
@@ -574,7 +579,7 @@ function get_x_y(arr, x, y, x_count, y_count) {
   // return arr[y * (x_count + 1) + x];
 }
 
-function centerMesh() {
+function centerSingletonMesh() {
   const boundingBox = new THREE.Box3().setFromObject(singletonMesh);
   const size = new THREE.Vector3();
   boundingBox.getSize(size);
@@ -586,6 +591,28 @@ function centerMesh() {
 
   // const bb = new THREE.Box3().setFromObject(singletonMesh);
   // console.log("bounding box after centering", bb);
+}
+
+function centerPartitionedMeshes() {
+  const overallBox = new THREE.Box3();
+
+  partitionMeshes.forEach((mesh) => {
+    const meshBox = new THREE.Box3().setFromObject(mesh);
+    overallBox.union(meshBox);
+  });
+
+  const size = new THREE.Vector3();
+  overallBox.getSize(size);
+  const centerOffset = new THREE.Vector3(
+    overallBox.min.x + size.x / 2,
+    overallBox.min.y + size.y / 2,
+    overallBox.min.z + size.z / 2
+  );
+
+  partitionMeshes.forEach((mesh) => {
+    mesh.position.sub(centerOffset);
+    mesh.updateMatrix();
+  });
 }
 
 function scaleByDemDimensions() {
@@ -855,7 +882,7 @@ function createMeshesFromLabelMap(label_map, elevation_m, grid_x, grid_y, physic
   // reset storage
   partitionMeshes = [];
 
-  // normalize label map to flattened row-major array (same ordering as flattenedElevation earlier)
+  // flatten label map to row-major array (same ordering as flattenedElevation earlier)
   let label_flat = [];
   if (!label_map) console.warn("No label map provided");
   for (let i = 0; i < label_map.length; i++) {

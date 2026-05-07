@@ -20,6 +20,7 @@ export function fileHandler() {
       // Show uploading state
       tiffInput.disabled = true;
       tiffLabel.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+      tiffLabel.classList.add("loading");
 
       const reader = new FileReader();
 
@@ -59,6 +60,7 @@ export function fileHandler() {
           // Restore HTML button label
           tiffInput.disabled = false;
           tiffLabel.innerHTML = origLabelHTML;
+          tiffLabel.classList.remove("loading");
         });
       };
 
@@ -69,8 +71,16 @@ export function fileHandler() {
   // Reference to the input element
   document.getElementById("geojsonUpload").addEventListener("change", function (event) {
     const file = event.target.files[0]; // Get the file
-    
+    const geojsonInput = document.getElementById("geojsonUpload");
+    const geojsonLabel = document.querySelector('label[for="geojsonUpload"]');
+
     if (file) {
+      const origLabelHTML = geojsonLabel.innerHTML;
+      // Show uploading state
+      geojsonInput.disabled = true;
+      geojsonLabel.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+      geojsonLabel.classList.add("loading");
+
       const reader = new FileReader();
 
       // Runs when the file is read
@@ -113,6 +123,12 @@ export function fileHandler() {
           geojsonLayer.eachLayer(function (layer) {
             addShapeToHistory(layer, file.name, subMenu.id);
           });
+
+          // Restore HTML button label
+          geojsonInput.disabled = false;
+          geojsonLabel.innerHTML = origLabelHTML;
+          geojsonLabel.classList.remove("loading");
+
         } catch (error) {
           alert("Invalid GeoJSON file");
           console.error("GeoJSON Error:", error);
