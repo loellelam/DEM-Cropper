@@ -5,7 +5,6 @@
 import { getAspectRatio } from './dem-mesh.js';
 
 export function setupModelDimensionSync() {
-  return;
   const widthInput = document.getElementById('physicalWidthInput');
   const heightInput = document.getElementById('physicalHeightInput');
 
