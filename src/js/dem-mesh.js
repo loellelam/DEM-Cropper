@@ -124,8 +124,8 @@ export async function generateDEM() {
     const circumference = 40075017; // meters
     const metersPerDegreeLat = 111320;
     const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat * Math.PI / 180) / 360);
-    const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLat; // meters per pixel
-    const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLon; // meters per pixel
+    const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon; // meters per pixel
+    const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLat; // meters per pixel
     // Calculate the total DEM size in meters
     const demWidthInMeters = metersPerWidthPixel * georaster.width;
     const demHeightInMeters = metersPerHeightPixel * georaster.height;
@@ -156,6 +156,7 @@ export async function generateDEM() {
 
   const myMask = createBinaryMask(georaster, selectedShape);
 
+  clearMeshes();
   if (physicalWidth <= bedWidth && physicalHeight <= bedHeight) { // no partitioning needed
     createMesh(base, demWidth, demHeight, myElevation, myMask, physicalWidth, physicalHeight);
     centerSingletonMesh();
@@ -191,13 +192,8 @@ function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidt
     const y_count = parseInt(demHeight);
 
     // should represent the physical size (in mm) of each pixel in the mesh
-    let x_step = physicalWidth / x_count;   // 1 unit = 1 mm
-    let y_step = physicalHeight / y_count;  // 1 unit = 1 mm
-
-    // should represent the physical size (in mm) of each pixel in the mesh
-    // multiply scale factors by 100 because they're very small numbers
-    x_step = (scaleX * 100 * x_count) / physicalWidth;   // 1 unit = 1 mm
-    y_step = (scaleY * 100 * y_count) / physicalHeight;  // 1 unit = 1 mm
+    let x_step = physicalWidth / (x_count - 1);   // 1 unit = 1 mm
+    let y_step = physicalHeight / (y_count - 1);  // 1 unit = 1 mm
 
     let geometries_array = [];
 
@@ -325,29 +321,6 @@ function get_x_y(arr, x, y, x_count, y_count) {
 function createMeshesFromLabelMap(label_map, elevation_m, demWidth, demHeight, physicalWidth, physicalHeight, base, opts = {}) {
   console.log("Partitioning...");
 
-  // Remove any previously created partition meshes from the scene and free resources
-  if (partitionMeshes && partitionMeshes.length) {
-    for (const m of partitionMeshes) {
-      try {
-        if (m) {
-          scene.remove(m);
-          if (m.geometry && typeof m.geometry.dispose === 'function') m.geometry.dispose();
-          if (m.material) {
-            if (Array.isArray(m.material)) {
-              m.material.forEach(mat => { if (mat && typeof mat.dispose === 'function') mat.dispose(); });
-            } else if (typeof m.material.dispose === 'function') {
-              m.material.dispose();
-            }
-          }
-        }
-      } catch (err) {
-        console.warn("Error disposing previous partition mesh:", err);
-      }
-    }
-  }
-  // reset storage
-  partitionMeshes = [];
-
   // flatten label map to row-major array (same ordering as flattenedElevation earlier)
   let label_flat = [];
   if (!label_map) console.warn("No label map provided");
@@ -403,6 +376,33 @@ function createMeshesFromLabelMap(label_map, elevation_m, demWidth, demHeight, p
   }
 
   return partitionMeshes;
+}
+
+function clearMeshes() {
+  if (singletonMesh) scene.remove(singletonMesh);
+
+  // Remove any previously created partition meshes from the scene and free resources
+  if (partitionMeshes && partitionMeshes.length) {
+    for (const m of partitionMeshes) {
+      try {
+        if (m) {
+          scene.remove(m);
+          if (m.geometry && typeof m.geometry.dispose === 'function') m.geometry.dispose();
+          if (m.material) {
+            if (Array.isArray(m.material)) {
+              m.material.forEach(mat => { if (mat && typeof mat.dispose === 'function') mat.dispose(); });
+            } else if (typeof m.material.dispose === 'function') {
+              m.material.dispose();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Error disposing previous partition mesh:", err);
+      }
+    }
+  }
+  // reset storage
+  partitionMeshes = [];
 }
 
 function centerSingletonMesh() {
@@ -478,8 +478,8 @@ export function getAspectRatio() {
   const circumference = 40075017;
   const metersPerDegreeLat = 111320;
   const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat * Math.PI / 180) / 360);
-  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLat;
-  const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLon;
+  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon;
+  const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLat;
   const demWidthInMeters = metersPerWidthPixel * georaster.width;
   const demHeightInMeters = metersPerHeightPixel * georaster.height;
   return demHeightInMeters / demWidthInMeters;
