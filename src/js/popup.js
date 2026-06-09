@@ -2,6 +2,7 @@ import { generateDEM } from "./dem-mesh.js";
 
 // Attach popup that opens DEM generation dialog when a shape is clicked
 export function promptDEMGeneration(shape) {
+  return; // Disable popup for now
   // Create the popup content
   const popupContent = document.createElement("div");
   popupContent.style.textAlign = "center";

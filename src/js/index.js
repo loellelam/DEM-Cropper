@@ -3,6 +3,7 @@
 */
 
 import { initTabs } from './tab-switching.js';
+import { initOverlay } from './overlay.js';
 import { accordianMenu } from './accordian-menu.js';
 import { initDrawingTools } from './draw-tools.js';
 import { fileHandler } from './file-handler.js';
@@ -21,6 +22,7 @@ initRegenerateModel();
 initExporter();
 
 document.addEventListener('DOMContentLoaded', () => {
+  initOverlay();
   setupModelDimensionSync();
   initToggleVerticalExaggeration();
 });

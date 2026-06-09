@@ -279,3 +279,27 @@ button:hover {
 .loading:hover {
   cursor: not-allowed;
 }
+
+#demView {
+  position: relative;
+}
+
+#meshOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+
+  font-size: 2rem;
+  font-weight: bold;
+
+  z-index: 1000;
+}
+
+.hidden {
+  display: none !important;
+}

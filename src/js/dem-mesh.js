@@ -3,6 +3,7 @@
 */
 
 import { switchToTab } from './tab-switching.js';
+import { showOverlay, hideOverlay } from './overlay.js';
 import { getSelectedGeotiff, getSelectedShape } from './selection.js';
 import { getCurrentVerticalExaggeration } from './toggle-vertical-exaggeration.js';
 import { createBinaryMask } from './binary-mask.js';
@@ -84,6 +85,8 @@ function setupScene() {
 
 // Main entry point
 export async function generateDEM() {
+  showOverlay("Generating...");
+
   // Get selected geotiff and shape
   const selectedGeotiff = getSelectedGeotiff();
   const selectedShape = getSelectedShape();
@@ -171,6 +174,7 @@ export async function generateDEM() {
     centerPartitionedMeshes();
   }
   
+  hideOverlay(); // hides 3D View overlay
 }
 
 /* input:
