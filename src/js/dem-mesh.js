@@ -143,7 +143,6 @@ export async function generateDEM() {
   }
   ({ scaleX, scaleY } = calculateScaleFactor()); // set global variables
 
-
   const flattenedElevation = [];
   for (let i = 0; i < myElevation.length; i++) {
     for (let j = 0; j < myElevation[i].length; j++) {
@@ -158,7 +157,7 @@ export async function generateDEM() {
 
   clearMeshes();
   if (physicalWidth <= bedWidth && physicalHeight <= bedHeight) { // no partitioning needed
-    createMesh(base, demWidth, demHeight, myElevation, myMask, physicalWidth, physicalHeight);
+    createMesh(base, demWidth, demHeight, myElevation, myMask, physicalWidth, physicalHeight, true);
     centerSingletonMesh();
   }
   else { // partitioning needed
@@ -182,7 +181,7 @@ export async function generateDEM() {
     elevation_m - 1d array of elevations
     mask_m - 1d binary mask array
 */
-function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidth, physicalHeight) {
+function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidth, physicalHeight, normalizeToPhysical) {
     if (singletonMesh) scene.remove(singletonMesh);
 
     const z_base = -Math.abs(parseFloat(base));
@@ -192,8 +191,8 @@ function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidt
     const y_count = parseInt(demHeight);
 
     // should represent the physical size (in mm) of each pixel in the mesh
-    let x_step = physicalWidth / (x_count - 1);   // 1 unit = 1 mm
-    let y_step = physicalHeight / (y_count - 1);  // 1 unit = 1 mm
+    let x_step = physicalWidth / x_count;   // 1 unit = 1 mm
+    let y_step = physicalHeight / y_count;  // 1 unit = 1 mm
 
     let geometries_array = [];
 
@@ -294,6 +293,22 @@ function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidt
     let mergedMaterial = new THREE.MeshStandardMaterial( { color: color, side: THREE.DoubleSide } );
     mergedMaterial.needsUpdate = true;
 
+    if (normalizeToPhysical) {
+      // Scale to desired physical dimensions
+      mergedGeometry.computeBoundingBox();
+      const bb = mergedGeometry.boundingBox;
+      // Shift to origin
+      mergedGeometry.translate(-bb.min.x, -bb.min.y, 0);
+      // Rescale X and Y to match exact physical dimensions
+      mergedGeometry.computeBoundingBox(); // recompute after translate
+      const currentWidth  = mergedGeometry.boundingBox.max.x - mergedGeometry.boundingBox.min.x;
+      const currentHeight = mergedGeometry.boundingBox.max.y - mergedGeometry.boundingBox.min.y;
+      const scaleToPhysicalX = physicalWidth  / currentWidth;
+      const scaleToPhysicalY = physicalHeight / currentHeight;
+      const uniformScale = Math.min(scaleToPhysicalX, scaleToPhysicalY); // use the smaller to avoid overfitting
+      mergedGeometry.scale(uniformScale, uniformScale, 1);
+    }
+
     let mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
     mergedMesh.rotateX(3*Math.PI / 2)
     singletonMesh = mergedMesh;
@@ -308,7 +323,6 @@ function get_x_y(arr, x, y, x_count, y_count) {
   const flippedY = y_count - 1 - y; // flip the y-axis
   return arr[flippedY * x_count + x]; // returns the value (0 or 1) at specified location
 }
-
 
 /**
  * Build one binary mask per label in a label map and call createMesh() for each.
@@ -352,7 +366,7 @@ function createMeshesFromLabelMap(label_map, elevation_m, demWidth, demHeight, p
     }
 
     // createMesh will add singletonMesh to scene; it will remove any existing singletonMesh at start
-    createMesh(base, demWidth, demHeight, elevation_m, mask, physicalWidth, physicalHeight);
+    createMesh(base, demWidth, demHeight, elevation_m, mask, physicalWidth, physicalHeight, false);
 
     // if createMesh created something, clone and keep it under this label
     if (singletonMesh) {
@@ -367,6 +381,26 @@ function createMeshesFromLabelMap(label_map, elevation_m, demWidth, demHeight, p
 
       // leave original singletonMesh in place so next createMesh call will remove it
     }
+  }
+
+  // Normalize to desired physical dimensions
+  // Compute collective bounding box across all partition meshes
+  const collectiveBB = new THREE.Box3();
+  for (const mesh of partitionMeshes) {
+    mesh.geometry.computeBoundingBox();
+    collectiveBB.union(mesh.geometry.boundingBox);
+  }
+  const offsetX = collectiveBB.min.x;
+  const offsetY = collectiveBB.min.y;
+  const currentWidth  = collectiveBB.max.x - collectiveBB.min.x;
+  const currentHeight = collectiveBB.max.y - collectiveBB.min.y;
+  const scaleToPhysicalX = physicalWidth  / currentWidth;
+  const scaleToPhysicalY = physicalHeight / currentHeight;
+  const uniformScale = Math.min(scaleToPhysicalX, scaleToPhysicalY); // use the smaller to avoid overfitting
+  // Apply same normalization to every partition
+  for (const mesh of partitionMeshes) {
+    mesh.geometry.translate(-offsetX, -offsetY, 0);
+    mesh.geometry.scale(uniformScale, uniformScale, 1);
   }
 
   // cleanup: remove the last singletonMesh produced by createMesh (we saved clones)
