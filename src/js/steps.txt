@@ -1,0 +1,65 @@
+Globals
+- scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters
+- singletonMesh, partitionMeshes
+
+Get selected geotiff and shape objects
+
+Get user input values
+physical width = 100. physical height = 0 as it is unknown for now and should be based off the aspect ratio of the shape
+
+Calculate the shape's real-world dimensions
+- Get the bounding box of the selected shape (in degrees).
+- Clamp the bounding box to the geotiff bounds.
+- Convert the bounding box dimensions from degrees to meters
+- Result: we have the width and height of the shape in meters
+
+Calculate the mesh dimensions
+- User provides physical width = 100mm. Physical height needs to be calculated based on aspect ratio and physical width.
+- The aspect ratio of the mesh is the ratio of the height divided by width of the shape.
+- Calculate the physical height of the mesh using the aspect ratio and the physical width provided by the user.
+- Result: We have the physical width and height of the mesh in millimeters.
+
+Calculate the model scale factor
+- The model scale factor is the ratio of the physical dimensions of the mesh to the real-world dimensions of the shape.
+- Calculate the scale factor for both width and height.
+- Example: scaleX = physicalWidth / shapeWidthInMeters;
+- Result: We have the model scale factors for width and height in millimeters per meter.
+- Only use one scale factor (choose either width or height?), in order to preserve the aspect ratio.
+    
+Calculate x_step and y_step, which is the size (in meters) of each pixel in the mesh
+- Units are in meters per pixel.
+- Result: We have the physical size (in meters) of each pixel in the mesh.
+
+Scale all elevation values by the model scale factor and vertical exaggeration. Elevation values are in meters.
+
+Create binary mask.
+- A 1D array of 0s and 1s representing whether each pixel should be included in the mesh or not.
+
+Create mesh in meters.
+- Loop through each cell. One cell consists of 4 neighboring vertices/pixels.
+- Check if each vertex is valid.
+- If all 4 vertices are valid, create the full terrain cell with 8 points.
+- If only 3 vertices are valid, create a triangular cell with 6 points.
+- Merge all created cells into a single geometry.
+- Result: We have a 3D mesh in meters.
+
+Scale mesh to specified physical dimensions
+- Use the model scale factor to convert from meters to millimeters.
+
+Rotate and center the mesh to face the user.
+
+Create partition meshes in meters
+- Flatten the 2D label map into a 1D array matching the DEM ordering.
+- Get all unique non-negative labels from the label map.
+- For each label:
+    - Create a binary mask where pixels belonging to the current label are marked as 1.
+    - Call createMesh() using that mask.
+    - createMesh() generates a mesh containing only the pixels for that partition.
+    - Clone the generated mesh and store it in partitionMeshes.
+- Result: We have a separate 3D mesh in meters for each labeled region.
+
+Scale all partition meshes to specified physical dimensions
+- Compute a collective bounding box across all partition meshes.
+- Find the minimum X and Y coordinates of the entire partitioned model.
+- Translate all meshes so the collective model starts at the origin.
+- Scale all partitions by model scale factor.

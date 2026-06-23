@@ -1,5 +1,7 @@
 /*
 * This file visualizes DEMs as 3D meshes.
+always correct aspect ratio
+incorrect phys dims
 */
 
 import { switchToTab } from './tab-switching.js';
@@ -20,7 +22,7 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 export const { scene, camera, renderer } = setupScene();
 
 // Geospatial skew accomodation
-let scaleX, scaleY;
+let scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters;
 
 // Three.js meshes
 export let singletonMesh = null;
@@ -127,24 +129,34 @@ export async function generateDEM() {
     const circumference = 40075017; // meters
     const metersPerDegreeLat = 111320;
     const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat * Math.PI / 180) / 360);
-    const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon; // meters per pixel
-    const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLat; // meters per pixel
-    // Calculate the total DEM size in meters
-    const demWidthInMeters = metersPerWidthPixel * georaster.width;
-    const demHeightInMeters = metersPerHeightPixel * georaster.height;
 
-    // On the first run, set model height based on aspect ratio
-    const aspectRatio = demHeightInMeters / demWidthInMeters;
+    // Get the bounding box of the selected shape, in degrees. Clamp shape bbox to geotiff bbox
+    const shapeBBox = selectedShape.getBounds();
+    const minX = Math.max(shapeBBox.getWest(),  georaster.xmin);
+    const maxX = Math.min(shapeBBox.getEast(),  georaster.xmax);
+    const minY = Math.max(shapeBBox.getSouth(), georaster.ymin);
+    const maxY = Math.min(shapeBBox.getNorth(), georaster.ymax);
+    const shapeWidthDeg = maxX - minX;
+    const shapeHeightDeg = maxY - minY;
+
+    // Convert shape extent to meters
+    const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
+    const shapeHeightInMeters = shapeHeightDeg * metersPerDegreeLat;
+
+    const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
     physicalHeight = parseFloat((physicalWidth * aspectRatio).toFixed(2));
     physicalHeightInput.value = physicalHeight;
 
-    // Use physicalWidth/physicalHeight for scaling
-    const scaleX = physicalWidth / demWidthInMeters; // mm/mm
-    const scaleY = physicalHeight / demHeightInMeters; // should be same as scaleX if my model scales uniformly (if aspect ratio is preserved)
+    // Scale factors should also be based on the shape's extent, since that's what gets printed
+    const scaleX = physicalWidth / shapeWidthInMeters;
+    const scaleY = physicalHeight / shapeHeightInMeters;
 
-    return { scaleX, scaleY };
+    const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon; // meters per pixel
+    const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLat; // meters per pixel
+    
+    return { scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters };
   }
-  ({ scaleX, scaleY } = calculateScaleFactor()); // set global variables
+  ({ scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters } = calculateScaleFactor()); // set global variables
 
   const flattenedElevation = [];
   for (let i = 0; i < myElevation.length; i++) {
@@ -195,13 +207,17 @@ function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidt
     const y_count = parseInt(demHeight);
 
     // should represent the physical size (in mm) of each pixel in the mesh
-    let x_step = physicalWidth / x_count;   // 1 unit = 1 mm
-    let y_step = physicalHeight / y_count;  // 1 unit = 1 mm
+    // let x_step = physicalWidth / x_count;   // 1 unit = 1 mm
+    // let y_step = physicalHeight / y_count;  // 1 unit = 1 mm
+
+    // represents the physical size (in meters) of each pixel
+    let x_step = metersPerWidthPixel;
+    let y_step = metersPerHeightPixel;
 
     let geometries_array = [];
 
-    for (let x = 0; x<x_count; x++) {
-        for (let y=0; y<y_count; y++) {
+    for (let x = 0; x < x_count; x++) {
+        for (let y = 0; y < y_count; y++) {
             // need to check the content of this vertex as well
             // as vertex at x+1, y+1, and x+1 y+1
             const v1 = get_x_y(mask_m, x, y, x_count, y_count);
@@ -227,6 +243,7 @@ function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidt
 
                     new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
                     new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
+
                     new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
                     new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
                 ];
@@ -297,24 +314,22 @@ function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidt
     let mergedMaterial = new THREE.MeshStandardMaterial( { color: color, side: THREE.DoubleSide } );
     mergedMaterial.needsUpdate = true;
 
-    if (normalizeToPhysical) {
+    if (normalizeToPhysical) { // only run this when creating singleton mesh, not partitioned meshes
       // Scale to desired physical dimensions
       mergedGeometry.computeBoundingBox();
       const bb = mergedGeometry.boundingBox;
       // Shift to origin
       mergedGeometry.translate(-bb.min.x, -bb.min.y, 0);
-      // Rescale X and Y to match exact physical dimensions
-      mergedGeometry.computeBoundingBox(); // recompute after translate
-      const currentWidth  = mergedGeometry.boundingBox.max.x - mergedGeometry.boundingBox.min.x;
-      const currentHeight = mergedGeometry.boundingBox.max.y - mergedGeometry.boundingBox.min.y;
-      const scaleToPhysicalX = physicalWidth  / currentWidth;
-      const scaleToPhysicalY = physicalHeight / currentHeight;
-      const uniformScale = Math.min(scaleToPhysicalX, scaleToPhysicalY); // use the smaller to avoid overfitting
-      mergedGeometry.scale(uniformScale, uniformScale, 1);
+
+      // Use geographic extents directly instead of geometry bbox
+      // geometry is in meters (metersPerPixel units), so convert shape meters to same units
+      const scaleToPhysicalX = physicalWidth  / shapeWidthInMeters;
+      const scaleToPhysicalY = physicalHeight / shapeHeightInMeters;
+      mergedGeometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
     }
 
     let mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
-    mergedMesh.rotateX(3*Math.PI / 2)
+    mergedMesh.rotateX(3*Math.PI / 2);
     singletonMesh = mergedMesh;
 
     scene.add(singletonMesh);
@@ -396,15 +411,14 @@ function createMeshesFromLabelMap(label_map, elevation_m, demWidth, demHeight, p
   }
   const offsetX = collectiveBB.min.x;
   const offsetY = collectiveBB.min.y;
-  const currentWidth  = collectiveBB.max.x - collectiveBB.min.x;
-  const currentHeight = collectiveBB.max.y - collectiveBB.min.y;
-  const scaleToPhysicalX = physicalWidth  / currentWidth;
-  const scaleToPhysicalY = physicalHeight / currentHeight;
-  const uniformScale = Math.min(scaleToPhysicalX, scaleToPhysicalY); // use the smaller to avoid overfitting
-  // Apply same normalization to every partition
+
+  // Use geographic extents directly
+  const scaleToPhysicalX = physicalWidth  / shapeWidthInMeters;
+  const scaleToPhysicalY = physicalHeight / shapeHeightInMeters;
+
   for (const mesh of partitionMeshes) {
     mesh.geometry.translate(-offsetX, -offsetY, 0);
-    mesh.geometry.scale(uniformScale, uniformScale, 1);
+    mesh.geometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
   }
 
   // cleanup: remove the last singletonMesh produced by createMesh (we saved clones)
@@ -516,9 +530,21 @@ export function getAspectRatio() {
   const circumference = 40075017;
   const metersPerDegreeLat = 111320;
   const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat * Math.PI / 180) / 360);
-  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon;
-  const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLat;
-  const demWidthInMeters = metersPerWidthPixel * georaster.width;
-  const demHeightInMeters = metersPerHeightPixel * georaster.height;
-  return demHeightInMeters / demWidthInMeters;
+  // Get the bounding box of the selected shape, in degrees. Clamp shape bbox to geotiff bbox
+  const selectedShape = getSelectedShape();
+  const shapeBBox = selectedShape.getBounds();
+  const minX = Math.max(shapeBBox.getWest(),  georaster.xmin);
+  const maxX = Math.min(shapeBBox.getEast(),  georaster.xmax);
+  const minY = Math.max(shapeBBox.getSouth(), georaster.ymin);
+  const maxY = Math.min(shapeBBox.getNorth(), georaster.ymax);
+  const shapeWidthDeg = maxX - minX;
+  const shapeHeightDeg = maxY - minY;
+
+  // Convert shape extent to meters
+  const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
+  const shapeHeightInMeters = shapeHeightDeg * metersPerDegreeLat;
+
+  const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
+
+  return aspectRatio;
 }
