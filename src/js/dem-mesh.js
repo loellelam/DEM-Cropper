@@ -22,7 +22,7 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 export const { scene, camera, renderer } = setupScene();
 
 // Geospatial skew accomodation
-let scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters;
+let geospatialCorrection, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters;
 
 // Three.js meshes
 export let singletonMesh = null;
@@ -109,8 +109,9 @@ export async function generateDEM() {
   let bedWidth = parseFloat(document.getElementById("bedWidthInput").value); // mm
   let bedHeight = parseFloat(document.getElementById("bedHeightInput").value); // mm
   let physicalWidth = parseFloat(document.getElementById("physicalWidthInput").value); // mm
-  let physicalHeight = 0;
-  let physicalHeightInput = document.getElementById("physicalHeightInput");
+  let physicalWidthInput = document.getElementById("physicalWidthInput"); // html input element
+  let physicalHeight = parseFloat(document.getElementById("physicalHeightInput").value); // mm
+  let physicalHeightInput = document.getElementById("physicalHeightInput"); // html input element
 
   // Extract geotiff data
   const georaster = selectedGeotiff.georasters[0];
@@ -144,26 +145,35 @@ export async function generateDEM() {
     const shapeHeightInMeters = shapeHeightDeg * metersPerDegreeLat;
 
     const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
-    physicalHeight = parseFloat((physicalWidth * aspectRatio).toFixed(2));
-    physicalHeightInput.value = physicalHeight;
+    console.log("AR: ", aspectRatio);
 
-    // Scale factors should also be based on the shape's extent, since that's what gets printed
-    const scaleX = physicalWidth / shapeWidthInMeters;
-    const scaleY = physicalHeight / shapeHeightInMeters;
+    if (aspectRatio > 1) {
+      // If the aspect ratio is greater than 1, it means the shape is taller than it is wide
+      physicalWidth = parseFloat((physicalHeight / aspectRatio).toFixed(2));
+      physicalWidthInput.value = physicalWidth;
+      geospatialCorrection = physicalHeight / shapeHeightInMeters;
+      console.log("Aspect ratio > 1, using scaleY for geospatialCorrection:", geospatialCorrection);
+    }
+    else {
+      physicalHeight = parseFloat((physicalWidth * aspectRatio).toFixed(2));
+      physicalHeightInput.value = physicalHeight;
+      geospatialCorrection = physicalWidth / shapeWidthInMeters;
+      console.log("Aspect ratio <= 1, using scaleX for geospatialCorrection:", geospatialCorrection);
+    }
 
     const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon; // meters per pixel
     const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLat; // meters per pixel
     
-    return { scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters };
+    return { geospatialCorrection, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters };
   }
-  ({ scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters } = calculateScaleFactor()); // set global variables
+  ({ geospatialCorrection, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters } = calculateScaleFactor()); // set global variables
 
   const flattenedElevation = [];
   for (let i = 0; i < myElevation.length; i++) {
     for (let j = 0; j < myElevation[i].length; j++) {
       // Only scale Z (elevation) here, X/Y scaling is handled in mesh creation
       // scaleX is used to to proportionally scale elevation when model size changes
-      flattenedElevation.push(myElevation[i][j] * scaleX * verticalExaggeration);
+      flattenedElevation.push(myElevation[i][j] * geospatialCorrection * verticalExaggeration);
     }
   }
   myElevation = flattenedElevation;
@@ -325,7 +335,8 @@ function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidt
       // geometry is in meters (metersPerPixel units), so convert shape meters to same units
       const scaleToPhysicalX = physicalWidth  / shapeWidthInMeters;
       const scaleToPhysicalY = physicalHeight / shapeHeightInMeters;
-      mergedGeometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
+      // mergedGeometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
+      mergedGeometry.scale(geospatialCorrection, geospatialCorrection, 1);
     }
 
     let mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
@@ -418,7 +429,8 @@ function createMeshesFromLabelMap(label_map, elevation_m, demWidth, demHeight, p
 
   for (const mesh of partitionMeshes) {
     mesh.geometry.translate(-offsetX, -offsetY, 0);
-    mesh.geometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
+    // mesh.geometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
+    mesh.geometry.scale(geospatialCorrection, geospatialCorrection, 1);
   }
 
   // cleanup: remove the last singletonMesh produced by createMesh (we saved clones)

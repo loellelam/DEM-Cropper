@@ -1,3 +1,8 @@
+3 coordinate systems:
+Geographic coordinates (degrees)
+Real-world coordinates (meters)
+Mesh model coordinates (millimeters)
+
 Globals
 - scaleX, scaleY, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters
 - singletonMesh, partitionMeshes
@@ -15,7 +20,7 @@ Calculate the shape's real-world dimensions
 
 Calculate the mesh dimensions
 - User provides physical width = 100mm. Physical height needs to be calculated based on aspect ratio and physical width.
-- The aspect ratio of the mesh is the ratio of the height divided by width of the shape.
+- The aspect ratio of the mesh is the ratio of the shape's height divided by width of the shape.
 - Calculate the physical height of the mesh using the aspect ratio and the physical width provided by the user.
 - Result: We have the physical width and height of the mesh in millimeters.
 
@@ -24,7 +29,7 @@ Calculate the model scale factor
 - Calculate the scale factor for both width and height.
 - Example: scaleX = physicalWidth / shapeWidthInMeters;
 - Result: We have the model scale factors for width and height in millimeters per meter.
-- Only use one scale factor (choose either width or height?), in order to preserve the aspect ratio.
+- Only use one scale factor (choose either width or height based on if aspect ratio is > or < 1), in order to preserve the aspect ratio.
     
 Calculate x_step and y_step, which is the size (in meters) of each pixel in the mesh
 - Units are in meters per pixel.
