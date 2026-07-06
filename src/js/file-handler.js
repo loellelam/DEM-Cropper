@@ -9,11 +9,41 @@ import { addTiffToHistory, addShapeToHistory } from './history.js';
 export function fileHandler() {
   const geojsonHistoryContainer = document.getElementById("geojsonHistory");
 
+  // Given a geotiff file, load it and display on the map
+  async function loadGeoTiff(arrayBuffer, filename) {
+    const georaster = await parseGeoraster(arrayBuffer);
+    georaster.filename = filename;
+    // Get statistical data of geotiff
+    const stats = geoblaze.stats(georaster);
+    const minElevation = 0;
+    const maxElevation = stats[0].max;
+
+    const tiffLayer = new GeoRasterLayer({
+      georaster,
+      opacity: 0.7,
+      pixelValuesToColorFn(value) {
+        if (value < 0) {
+          return "transparent";
+        } else {
+          // Map the elevation value to grayscale
+          let grayscaleValue = (value - minElevation) / (maxElevation - minElevation) * 255;
+          return `rgb(${grayscaleValue}, ${grayscaleValue}, ${grayscaleValue})`;
+        }
+      },
+      resolution: 128 // Adjust for performance
+    });
+
+    tiffLayer.addTo(map);
+    tiffsLayerGroup.addLayer(tiffLayer);
+    map.fitBounds(tiffLayer.getBounds()); // Fit map to the new TIFF layer
+
+    addTiffToHistory(tiffLayer, filename, "geotiffHistory"); // Add to upload history
+  }
+
   document.getElementById("tiffUpload").addEventListener("change", function (event) {
     const file = event.target.files[0];
     const tiffInput = document.getElementById("tiffUpload");
     const tiffLabel = document.querySelector('label[for="tiffUpload"]');
-
 
     if (file) {
       const origLabelHTML = tiffLabel.innerHTML;
@@ -24,48 +54,44 @@ export function fileHandler() {
 
       const reader = new FileReader();
 
-      reader.onload = function (e) {
-        const arrayBuffer = e.target.result;
+      reader.onload = async function (e) {
+        await loadGeoTiff(e.target.result, file.name);
 
-        parseGeoraster(arrayBuffer).then((georaster) => {
-          // Store the filename on the georaster object for later use
-          georaster.filename = file.name;
-          // Get statistical data of geotiff
-          const stats = geoblaze.stats(georaster);
-          const minElevation = 0;
-          const maxElevation = stats[0].max;
-
-          // Create a new GeoRasterLayer
-          const tiffLayer = new GeoRasterLayer({
-            georaster: georaster,
-            opacity: 0.7,
-            pixelValuesToColorFn: function (value) {
-              if (value < 0) {
-                return "transparent";
-              } else {
-                // Map the elevation value to grayscale
-                let grayscaleValue = (value - minElevation) / (maxElevation - minElevation) * 255;
-                return `rgb(${grayscaleValue}, ${grayscaleValue}, ${grayscaleValue})`;
-              }
-            },
-            resolution: 128, // Adjust for performance
-          });
-
-          tiffLayer.addTo(map);
-          tiffsLayerGroup.addLayer(tiffLayer);
-          map.fitBounds(tiffLayer.getBounds()); // Fit map to the new TIFF layer
-
-          addTiffToHistory(tiffLayer, file.name, "geotiffHistory"); // Add to upload history
-
-          // Restore HTML button label
-          tiffInput.disabled = false;
-          tiffLabel.innerHTML = origLabelHTML;
-          tiffLabel.classList.remove("loading");
-        });
+        // Restore HTML button label
+        tiffInput.disabled = false;
+        tiffLabel.innerHTML = origLabelHTML;
+        tiffLabel.classList.remove("loading");
       };
 
       reader.readAsArrayBuffer(file);
     }
+  });
+
+  // Sample TIFF files
+  document.querySelectorAll(".sampleTiff").forEach(item => {
+    item.addEventListener("click", async () => {
+      const filename = item.textContent;
+      item.textContent = "Loading...";
+      item.classList.add("loading");
+
+      try {
+        const response = await fetch(`assets/${item.dataset.file}`);
+        const arrayBuffer = await response.arrayBuffer();
+
+        await loadGeoTiff(arrayBuffer, item.dataset.file);
+
+        item.textContent = filename + " (Loaded)";
+        item.classList.remove("loading");
+        item.classList.add("disabled");
+
+      }
+      catch (err) {
+        console.error(err);
+        item.textContent = "Failed to load";
+      }
+
+    });
+
   });
 
   // Reference to the input element

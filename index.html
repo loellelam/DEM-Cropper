@@ -57,8 +57,18 @@
                 <i class="fas fa-file-upload"></i> Upload GeoTIFF
               </label>
               <input type="file" id="tiffUpload" accept=".tif,.tiff" style="display: none;" />
-              
+
               <br /><br />
+              <p>Or choose a sample dataset:</p>
+              <div id="sampleTiffList" class="historyDiv">
+                <div class="sampleTiff" data-file="big_island.tif">Big Island</div>
+                <div class="sampleTiff" data-file="kauai.tif">Kauai</div>
+                <div class="sampleTiff" data-file="maui_nui.tif">Maui Nui</div>
+                <div class="sampleTiff" data-file="oahu.tif">Oahu</div>
+                <div class="sampleTiff" data-file="statewide.tif">Statewide</div>
+              </div>
+              
+              <br />
               <p>Upload History:</p>
               <div id="geotiffHistory" class="historyDiv"></div>
             </div>
