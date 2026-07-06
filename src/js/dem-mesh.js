@@ -4,6 +4,8 @@ always correct aspect ratio
 incorrect phys dims
 */
 
+import { map } from "./map.js";
+
 import { switchToTab } from './tab-switching.js';
 import { showOverlay, hideOverlay } from './overlay.js';
 import { getSelectedGeotiff, getSelectedShape } from './selection.js';
@@ -23,6 +25,9 @@ export const { scene, camera, renderer } = setupScene();
 
 // Geospatial skew accomodation
 let geospatialCorrection, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters;
+
+// Clamped shape for visual feedback
+let clampedShape = null;
 
 // Three.js meshes
 export let singletonMesh = null;
@@ -139,6 +144,20 @@ export async function generateDEM() {
     const maxY = Math.min(shapeBBox.getNorth(), georaster.ymax);
     const shapeWidthDeg = maxX - minX;
     const shapeHeightDeg = maxY - minY;
+
+    // Visually display constrained area
+    const clampedBounds = L.latLngBounds(
+      [minY, minX],
+      [maxY, maxX]
+    );
+    if (clampedShape) {
+        map.removeLayer(clampedShape);
+    }
+    clampedShape = L.rectangle(clampedBounds, {
+        color: "red",
+        weight: 2,
+        fill: false
+    }).addTo(map);
 
     // Convert shape extent to meters
     const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
