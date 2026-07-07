@@ -1,10 +1,18 @@
 /*
 * This file visualizes DEMs as 3D meshes.
-always correct aspect ratio
-incorrect phys dims
+* always correct aspect ratio
+* incorrect phys dims
+*
+* Organized into 5 sections:
+*   1. SCENE          - Three.js scene/camera/renderer lifecycle
+*   2. GEO MATH       - pure geospatial math
+*   3. PRISM GEOMETRY - truncated triangular prism geometry creation
+*   4. MESH BUILDER   - turns elevation + mask + geoContext into THREE meshes
+*   5. ORCHESTRATION  - generateDEM() entry point, reads DOM, wires it together
 */
 
-import { map } from "./map.js";
+import { map } from "./map.js"; // for testing, for clamped shape
+let clampedShape = null; // for testing, Clamped shape for visual feedback
 
 import { switchToTab } from './tab-switching.js';
 import { showOverlay, hideOverlay } from './overlay.js';
@@ -18,24 +26,20 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 
-// Global variables ============================================
+// Debug logging — flip to true to re-enable verbose console output
+const DEBUG = false;
+function dlog(...args) { if (DEBUG) console.log(...args); }
 
-// Three.js scene singleton
-export const { scene, camera, renderer } = setupScene();
+// NoData sentinel threshold for elevation values
+const NODATA_THRESHOLD = -2e30;
 
-// Geospatial skew accomodation
-let geospatialCorrection, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters;
+/* ============================================================
+ * SECTION 1: SCENE
+ * Three.js scene/camera/renderer setup and lifecycle management.
+ * Owns scene-level mutable state (singletonMesh, partitionMeshes).
+ * No geospatial math, no DOM form-reading beyond the #dem container.
+ * ============================================================ */
 
-// Clamped shape for visual feedback
-let clampedShape = null;
-
-// Three.js meshes
-export let singletonMesh = null;
-export let partitionMeshes = [];
-
-//==============================================================
-
-// Three.js scene setup
 function setupScene() {
   const scene = new THREE.Scene();
 
@@ -90,376 +94,12 @@ function setupScene() {
   return { scene, camera, renderer };
 }
 
-// Main entry point
-export async function generateDEM() {
-  showOverlay("Generating...");
+export const { scene, camera, renderer } = setupScene();
 
-  // Get selected geotiff and shape
-  const selectedGeotiff = getSelectedGeotiff();
-  const selectedShape = getSelectedShape();
-  if (!selectedGeotiff) {
-    window.alert("Please upload a geotiff in Step 1 first.");
-    return;
-  }
-  else if (!selectedShape) {
-    window.alert("Please select a shape in Step 2 first.");
-    return;
-  }
-
-  switchToTab("demView"); // Switch to the 3D Model tab
-
-  // Get user input values
-  let base = parseFloat(document.getElementById("baseThicknessInput").value); // mm
-  let verticalExaggeration = parseFloat(getCurrentVerticalExaggeration()); // scale factor
-  let bedWidth = parseFloat(document.getElementById("bedWidthInput").value); // mm
-  let bedHeight = parseFloat(document.getElementById("bedHeightInput").value); // mm
-  let physicalWidth = parseFloat(document.getElementById("physicalWidthInput").value); // mm
-  let physicalWidthInput = document.getElementById("physicalWidthInput"); // html input element
-  let physicalHeight = parseFloat(document.getElementById("physicalHeightInput").value); // mm
-  let physicalHeightInput = document.getElementById("physicalHeightInput"); // html input element
-
-  // Extract geotiff data
-  const georaster = selectedGeotiff.georasters[0];
-  let demWidth = georaster.width;
-  let demHeight = georaster.height;
-  let myElevation = georaster.values[0];
-
-  console.log("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-
-  // Calculate scaling factors to accomodate geospatial skew. Also set physicalHeight
-  function calculateScaleFactor() {
-    // Calculate meters per pixel 
-    // Need to check projection type. If pixelWidth is in degrees per pixel, convert to meters per pixel 
-    // Use center latitude bc degrees longitude vary with latitude
-    const centerLat = (georaster.ymin + georaster.ymax) / 2;
-    const circumference = 40075017; // meters
-    const metersPerDegreeLat = 111320;
-    const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat * Math.PI / 180) / 360);
-
-    // Get the bounding box of the selected shape, in degrees. Clamp shape bbox to geotiff bbox
-    const shapeBBox = selectedShape.getBounds();
-    const minX = Math.max(shapeBBox.getWest(),  georaster.xmin);
-    const maxX = Math.min(shapeBBox.getEast(),  georaster.xmax);
-    const minY = Math.max(shapeBBox.getSouth(), georaster.ymin);
-    const maxY = Math.min(shapeBBox.getNorth(), georaster.ymax);
-    const shapeWidthDeg = maxX - minX;
-    const shapeHeightDeg = maxY - minY;
-
-    // Visually display constrained area
-    const clampedBounds = L.latLngBounds(
-      [minY, minX],
-      [maxY, maxX]
-    );
-    if (clampedShape) {
-        map.removeLayer(clampedShape);
-    }
-    clampedShape = L.rectangle(clampedBounds, {
-        color: "red",
-        weight: 2,
-        fill: false
-    }).addTo(map);
-
-    // Convert shape extent to meters
-    const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
-    const shapeHeightInMeters = shapeHeightDeg * metersPerDegreeLat;
-
-    const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
-    console.log("AR: ", aspectRatio);
-
-    if (aspectRatio > 1) {
-      // If the aspect ratio is greater than 1, it means the shape is taller than it is wide
-      physicalWidth = parseFloat((physicalHeight / aspectRatio).toFixed(2));
-      physicalWidthInput.value = physicalWidth;
-      geospatialCorrection = physicalHeight / shapeHeightInMeters;
-      console.log("Aspect ratio > 1, using scaleY for geospatialCorrection:", geospatialCorrection);
-    }
-    else {
-      physicalHeight = parseFloat((physicalWidth * aspectRatio).toFixed(2));
-      physicalHeightInput.value = physicalHeight;
-      geospatialCorrection = physicalWidth / shapeWidthInMeters;
-      console.log("Aspect ratio <= 1, using scaleX for geospatialCorrection:", geospatialCorrection);
-    }
-
-    const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon; // meters per pixel
-    const metersPerHeightPixel = georaster.pixelHeight * metersPerDegreeLat; // meters per pixel
-    
-    return { geospatialCorrection, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters };
-  }
-  ({ geospatialCorrection, metersPerWidthPixel, metersPerHeightPixel, shapeWidthInMeters, shapeHeightInMeters } = calculateScaleFactor()); // set global variables
-
-  const flattenedElevation = [];
-  for (let i = 0; i < myElevation.length; i++) {
-    for (let j = 0; j < myElevation[i].length; j++) {
-      // Only scale Z (elevation) here, X/Y scaling is handled in mesh creation
-      // scaleX is used to to proportionally scale elevation when model size changes
-      flattenedElevation.push(myElevation[i][j] * geospatialCorrection * verticalExaggeration);
-    }
-  }
-  myElevation = flattenedElevation;
-
-  const myMask = createBinaryMask(georaster, selectedShape);
-
-  clearMeshes();
-  if (physicalWidth <= bedWidth && physicalHeight <= bedHeight) { // no partitioning needed
-    createMesh(base, demWidth, demHeight, myElevation, myMask, physicalWidth, physicalHeight, true);
-    centerSingletonMesh();
-  }
-  else { // partitioning needed
-    // Send mesh data to backend for processing
-    const maskedElevation = applyMaskToElevation(myElevation, myMask);
-    const maskedElevation2D = convertElevationInto2DArray(maskedElevation, demWidth, demHeight);
-    let result = await sendMeshToBackend(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight);
-    const best_cut = result.best_cut;
-
-    createMeshesFromLabelMap(best_cut, maskedElevation, demWidth, demHeight, physicalWidth, physicalHeight, base);
-    centerPartitionedMeshes();
-  }
-  
-  hideOverlay(); // hides 3D View overlay
-}
-
-/* input:
-    singletonMesh - will hold the output mesh
-    base - base thickness
-    demWidth - geotiff width
-    demHeight - geotiff height
-    elevation_m - 1d array of elevations
-    mask_m - 1d binary mask array
-*/
-function createMesh(base, demWidth, demHeight, elevation_m, mask_m, physicalWidth, physicalHeight, normalizeToPhysical) {
-    if (singletonMesh) scene.remove(singletonMesh);
-
-    const z_base = -Math.abs(parseFloat(base));
-    
-    // should be the number of pixels in the shape
-    const x_count = parseInt(demWidth);
-    const y_count = parseInt(demHeight);
-
-    // should represent the physical size (in mm) of each pixel in the mesh
-    // let x_step = physicalWidth / x_count;   // 1 unit = 1 mm
-    // let y_step = physicalHeight / y_count;  // 1 unit = 1 mm
-
-    // represents the physical size (in meters) of each pixel
-    let x_step = metersPerWidthPixel;
-    let y_step = metersPerHeightPixel;
-
-    let geometries_array = [];
-
-    for (let x = 0; x < x_count; x++) {
-        for (let y = 0; y < y_count; y++) {
-            // need to check the content of this vertex as well
-            // as vertex at x+1, y+1, and x+1 y+1
-            const v1 = get_x_y(mask_m, x, y, x_count, y_count);
-            const v2 = get_x_y(mask_m, x+1, y, x_count, y_count);
-            const v3 = get_x_y(mask_m, x, y+1, x_count, y_count);
-            const v4 = get_x_y(mask_m, x+1, y+1, x_count, y_count);
-            
-            const e1 = get_x_y(elevation_m, x, y, x_count, y_count);
-            const e2 = get_x_y(elevation_m, x+1, y, x_count, y_count);
-            const e3 = get_x_y(elevation_m, x, y+1, x_count, y_count);
-            const e4 = get_x_y(elevation_m, x+1, y+1, x_count, y_count);
-
-            //check if any of the points are null
-
-            if (v1==1 && v2==1 && v3==1 && v4==1 && e1 >=0 && e2 >=0 && e3>=0 && e4>=0) { // all 4 points are not null and elevation above 0
-                let points = [
-                    // polytope
-                    new THREE.Vector3(x*x_step, y*y_step, z_base), // create point v1 at base
-                    new THREE.Vector3(x*x_step, y*y_step, get_x_y(elevation_m, x, y, x_count, y_count)), //create point v1 at elevation
-
-                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base), // v2
-                    new THREE.Vector3((x+1)*x_step, y*y_step, get_x_y(elevation_m, (x+1), y, x_count, y_count)),
-
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
-
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
-                ];
-
-                let vox_geometry = new ConvexGeometry(points); //create a closed geometry of these 8 points
-                geometries_array.push(vox_geometry);
-            } else if (v1==1 && v2==1 && v3==1 && e1 >=0 && e2 >=0 && e3>=0) { // point #4 is null
-                let points =[
-                    new THREE.Vector3(x*x_step, y*y_step, z_base), // v1
-                    new THREE.Vector3(x*x_step, y*y_step, get_x_y(elevation_m, x, y, x_count, y_count)),
-                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base), // v2
-                    new THREE.Vector3((x+1)*x_step, y*y_step, get_x_y(elevation_m, (x+1), y, x_count, y_count)),
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
-                    
-                ];
-
-                let  vox_geometry = new ConvexGeometry(points);
-              geometries_array.push(vox_geometry);
-            } else if (v1==1 && v2==1 && v4==1 && e1>=0 && e2>=0 && e4>=0) {
-                let points =[
-                    new THREE.Vector3(x*x_step, y*y_step, z_base), // v1
-                    new THREE.Vector3(x*x_step, y*y_step, get_x_y(elevation_m, x, y, x_count, y_count)),
-                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base), // v2
-                    new THREE.Vector3((x+1)*x_step, y*y_step, get_x_y(elevation_m, (x+1), y, x_count, y_count)),
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
-                ];
-
-                let vox_geometry = new ConvexGeometry(points);
-              geometries_array.push(vox_geometry);
-            } else if (v2==1 && v3==1 && v4==1 && e2>=0 && e3 >=0 && e4>=0) {
-                let points =[
-                    new THREE.Vector3((x+1)*x_step, y*y_step, z_base), // v2
-                    new THREE.Vector3((x+1)*x_step, y*y_step, get_x_y(elevation_m, (x+1), y, x_count, y_count)),
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
-                ];
-
-                let vox_geometry = new ConvexGeometry(points);
-              geometries_array.push(vox_geometry);
-            } else if (v1==1 && v3==1 && v4==1 && e1 >=0 && e3>=0 && e4>=0) {
-                let points =[
-                    new THREE.Vector3(x*x_step, y*y_step, z_base), // v1
-                    new THREE.Vector3(x*x_step, y*y_step, get_x_y(elevation_m, x, y, x_count, y_count)),
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, z_base), // v3
-                    new THREE.Vector3(x*x_step, (y+1)*y_step, get_x_y(elevation_m, x, (y+1), x_count, y_count)),
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, z_base), // v4
-                    new THREE.Vector3((x+1)*x_step, (y+1)*y_step, get_x_y(elevation_m, (x+1), (y+1), x_count, y_count)),
-                ];
-
-                let vox_geometry = new ConvexGeometry(points);
-              geometries_array.push(vox_geometry);
-            }
-        }
-    }
-
-    if (geometries_array.length == 0) { //if no geometries were created
-      singletonMesh = null;
-      return;
-    }
-
-    // merging the geometries
-    let mergedGeometry = BufferGeometryUtils.mergeGeometries(geometries_array);
-    const color = new THREE.Color().setHSL((0 * 0.618033988749895) % 1, 0.5, 0.5);
-    let mergedMaterial = new THREE.MeshStandardMaterial( { color: color, side: THREE.DoubleSide } );
-    mergedMaterial.needsUpdate = true;
-
-    if (normalizeToPhysical) { // only run this when creating singleton mesh, not partitioned meshes
-      // Scale to desired physical dimensions
-      mergedGeometry.computeBoundingBox();
-      const bb = mergedGeometry.boundingBox;
-      // Shift to origin
-      mergedGeometry.translate(-bb.min.x, -bb.min.y, 0);
-
-      // Use geographic extents directly instead of geometry bbox
-      // geometry is in meters (metersPerPixel units), so convert shape meters to same units
-      const scaleToPhysicalX = physicalWidth  / shapeWidthInMeters;
-      const scaleToPhysicalY = physicalHeight / shapeHeightInMeters;
-      // mergedGeometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
-      mergedGeometry.scale(geospatialCorrection, geospatialCorrection, 1);
-    }
-
-    let mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
-    mergedMesh.rotateX(3*Math.PI / 2);
-    singletonMesh = mergedMesh;
-
-    scene.add(singletonMesh);
-    console.log(singletonMesh);
-}
-
-// Helper for createMesh: Get the 1d coord based on the 2d x,y coord
-function get_x_y(arr, x, y, x_count, y_count) {
-  if (x>=x_count || y >= y_count) return null; //if dimensions are out of bounds, return null
-  const flippedY = y_count - 1 - y; // flip the y-axis
-  return arr[flippedY * x_count + x]; // returns the value (0 or 1) at specified location
-}
-
-/**
- * Build one binary mask per label in a label map and call createMesh() for each.
- * Returns an object mapping labelId -> mesh (added to scene).
- *
- * label_map: either 2D array [rows][cols] or flattened 1D array length demWidth*demHeight
- * elevation_m: flattened 1D elevation array (same ordering as createMesh expects)
- * demWidth, demHeight, physicalWidth, physicalHeight, base: passed to createMesh
- */
-function createMeshesFromLabelMap(label_map, elevation_m, demWidth, demHeight, physicalWidth, physicalHeight, base, opts = {}) {
-  console.log("Partitioning...");
-
-  // flatten label map to row-major array (same ordering as flattenedElevation earlier)
-  let label_flat = [];
-  if (!label_map) console.warn("No label map provided");
-  for (let i = 0; i < label_map.length; i++) {
-    for (let j = 0; j < label_map[i].length; j++) {
-      label_flat.push(label_map[i][j]);
-    }
-  }
-
-  const total = parseInt(demWidth) * parseInt(demHeight);
-  if (label_flat.length !== total) {
-    console.warn("Label map size doesn't match demWidth*demHeight:", label_flat.length, "vs", total);
-  }
-
-  // collect unique non-negative labels
-  const labelSet = new Set();
-  for (let i = 0; i < Math.min(label_flat.length, total); i++) {
-    const v = label_flat[i];
-    if (typeof v === 'number' && v >= 0) labelSet.add(Math.trunc(v));
-  }
-  const labels = Array.from(labelSet).sort((a,b) => a-b);
-
-  // For each label, build binary mask and call createMesh.
-  // We rely on createMesh to produce singletonMesh; after each call we clone and keep a copy
-  for (const labelId of labels) {
-    const mask = new Array(total).fill(0);
-    for (let i = 0; i < total && i < label_flat.length; i++) {
-      if (label_flat[i] === labelId) mask[i] = 1;
-    }
-
-    // createMesh will add singletonMesh to scene; it will remove any existing singletonMesh at start
-    createMesh(base, demWidth, demHeight, elevation_m, mask, physicalWidth, physicalHeight, false);
-
-    // if createMesh created something, clone and keep it under this label
-    if (singletonMesh) {
-      // clone geometry + material so later removals/changes don't affect saved partition
-      const copy = singletonMesh.clone(true);
-      copy.material = singletonMesh.material.clone();
-      // give each partition a distinguishable color
-      copy.material.color = new THREE.Color().setHSL((labelId * 0.618033988749895) % 1, 0.5, 0.5);
-      copy.name = `partition_${labelId}`;
-      scene.add(copy);
-      partitionMeshes.push(copy);
-
-      // leave original singletonMesh in place so next createMesh call will remove it
-    }
-  }
-
-  // Normalize to desired physical dimensions
-  // Compute collective bounding box across all partition meshes
-  const collectiveBB = new THREE.Box3();
-  for (const mesh of partitionMeshes) {
-    mesh.geometry.computeBoundingBox();
-    collectiveBB.union(mesh.geometry.boundingBox);
-  }
-  const offsetX = collectiveBB.min.x;
-  const offsetY = collectiveBB.min.y;
-
-  // Use geographic extents directly
-  const scaleToPhysicalX = physicalWidth  / shapeWidthInMeters;
-  const scaleToPhysicalY = physicalHeight / shapeHeightInMeters;
-
-  for (const mesh of partitionMeshes) {
-    mesh.geometry.translate(-offsetX, -offsetY, 0);
-    // mesh.geometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
-    mesh.geometry.scale(geospatialCorrection, geospatialCorrection, 1);
-  }
-
-  // cleanup: remove the last singletonMesh produced by createMesh (we saved clones)
-  if (singletonMesh) {
-    scene.remove(singletonMesh);
-    singletonMesh = null;
-  }
-
-  return partitionMeshes;
-}
+// Three.js meshes
+// Exported so other modules can inspect mesh state, but all writes happen only within this section's functions 
+export let singletonMesh = null;
+export let partitionMeshes = [];
 
 function clearMeshes() {
   if (singletonMesh) scene.remove(singletonMesh);
@@ -486,16 +126,17 @@ function clearMeshes() {
   }
   // reset storage
   partitionMeshes = [];
+  singletonMesh = null;
 }
 
 function centerSingletonMesh() {
   const boundingBox = new THREE.Box3().setFromObject(singletonMesh);
   const size = new THREE.Vector3();
   boundingBox.getSize(size);
-  
-  singletonMesh.position.x -= boundingBox.min.x + size.x/2;
-  singletonMesh.position.y -= boundingBox.min.y + size.y/2;
-  singletonMesh.position.z -= boundingBox.min.z + size.z/2;
+
+  singletonMesh.position.x -= boundingBox.min.x + size.x / 2;
+  singletonMesh.position.y -= boundingBox.min.y + size.y / 2;
+  singletonMesh.position.z -= boundingBox.min.z + size.z / 2;
   singletonMesh.updateMatrix();
 }
 
@@ -521,24 +162,365 @@ function centerPartitionedMeshes() {
   });
 }
 
-// Helper: Prepare elevation for partitioned mesh creation by applying binary mask and converting no-data values to NaN
+
+/* ============================================================
+ * SECTION 2: GEO MATH
+ * Pure geospatial math.
+ * Every function takes its inputs as parameters and returns a value.
+ * ============================================================ */
+
+const EARTH_CIRCUMFERENCE_M = 40075017; // meters, at the equator
+const METERS_PER_DEGREE_LAT = 111320;   // approx, constant across latitudes
+
+// Meters per degrees longitude varies with latitude
+function metersPerDegreeLonAt(latitudeDeg) {
+  return Math.abs(EARTH_CIRCUMFERENCE_M * Math.cos(latitudeDeg * Math.PI / 180) / 360);
+}
+
+/**
+ * Compute the extent (in meters) of the selected shape, clamped to the
+ * geotiff's own bounding box.
+ *
+ * Returns { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon }
+ */
+function getShapeExtentInMeters(georaster, selectedShape) {
+  const centerLat = (georaster.ymin + georaster.ymax) / 2;
+  const metersPerDegreeLon = metersPerDegreeLonAt(centerLat);
+
+  const shapeBBox = selectedShape.getBounds();
+  const minX = Math.max(shapeBBox.getWest(), georaster.xmin);
+  const maxX = Math.min(shapeBBox.getEast(), georaster.xmax);
+  const minY = Math.max(shapeBBox.getSouth(), georaster.ymin);
+  const maxY = Math.min(shapeBBox.getNorth(), georaster.ymax);
+
+  const shapeWidthDeg = maxX - minX;
+  const shapeHeightDeg = maxY - minY;
+
+  // For testing: Visually display constrained area
+  const clampedBounds = L.latLngBounds(
+    [minY, minX],
+    [maxY, maxX]
+  );
+  if (clampedShape) {
+      map.removeLayer(clampedShape);
+  }
+  clampedShape = L.rectangle(clampedBounds, {
+      color: "red",
+      weight: 2,
+      fill: false
+  }).addTo(map);
+
+  const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
+  const shapeHeightInMeters = shapeHeightDeg * METERS_PER_DEGREE_LAT;
+
+  return { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon };
+}
+
+/**
+ * Build the full geospatial scaling context needed to turn pixel-space
+ * elevation data into a physically-dimensioned mesh.
+ *
+ * Returns a single geoContext object which can be passed to any function
+ * that needs scale/physical-dimension info.
+ * geospatialCorrection - scale factor used to correct geospatial distortion
+ * metersPerWidthPixel - physical width of each pixel in meters
+ * metersPerHeightPixel - physical height of each pixel in meters
+ * shapeWidthInMeters - width of the selected shape in meters
+ * shapeHeightInMeters - height of the selected shape in meters
+ * physicalWidth - user-specified physical width (mm), or calculated based on aspect ratio
+ * physicalHeight - user-specified physical height (mm), or calculated based on aspect ratio
+ */
+function buildGeoContext(georaster, selectedShape, physicalWidth, physicalHeight) {
+  const { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon } = getShapeExtentInMeters(georaster, selectedShape);
+
+  const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
+  let geospatialCorrection;
+  if (aspectRatio > 1) {
+    // If the aspect ratio is greater than 1, the shape is taller than it is wide
+    physicalWidth = parseFloat((physicalHeight / aspectRatio).toFixed(2));
+    geospatialCorrection = physicalHeight / shapeHeightInMeters;
+  }
+  else {
+    physicalHeight = parseFloat((physicalWidth * aspectRatio).toFixed(2));
+    geospatialCorrection = physicalWidth / shapeWidthInMeters;
+  }
+
+  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon;
+  const metersPerHeightPixel = georaster.pixelHeight * METERS_PER_DEGREE_LAT;
+
+  return {
+    geospatialCorrection,
+    metersPerWidthPixel,
+    metersPerHeightPixel,
+    shapeWidthInMeters,
+    shapeHeightInMeters,
+    physicalWidth,
+    physicalHeight,
+  };
+}
+
+// Helper to get DEM aspect ratio for model dimension sync.
+export function getAspectRatio() {
+  const selectedGeotiff = getSelectedGeotiff();
+  if (!selectedGeotiff) return 1;
+  const georaster = selectedGeotiff.georasters[0];
+  const selectedShape = getSelectedShape();
+
+  const { shapeWidthInMeters, shapeHeightInMeters } = getShapeExtentInMeters(georaster, selectedShape);
+  const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
+  return aspectRatio;
+}
+
+
+/* ============================================================
+ * SECTION 3: PRISM GEOMETRY
+ * Pure truncated triangular prism (mesh cell) generation.
+ * Takes raw elevation/mask arrays + pixel coordinates, returns THREE
+ * geometry objects (or null).
+ * ============================================================ */
+
+// The 4 corners of a single DEM grid cell, in (dx, dy) offsets from (x, y).
+const CELL_CORNERS = [
+  { dx: 0, dy: 0 }, // v1
+  { dx: 1, dy: 0 }, // v2
+  { dx: 0, dy: 1 }, // v3
+  { dx: 1, dy: 1 }, // v4
+];
+
+/**
+ * Get the value at (x, y) from a flattened row-major array, with the
+ * Y axis flipped (DEM row 0 = top, mesh Y=0 = bottom).
+ * Returns NaN (not null) when out of bounds, so all downstream validity
+ * checks can safely use Number.isFinite() instead of `>= 0`, which in
+ * JS treats null as 0 and can silently pass invalid data through.
+ */
+function getXY(arr, x, y, xCount, yCount) {
+  if (x >= xCount || y >= yCount || x < 0 || y < 0) return NaN;
+  const flippedY = yCount - 1 - y; // flip y-axis
+  const v = arr[flippedY * xCount + x];
+
+  if (v === null || v === undefined) {
+    return NaN;
+  }
+  return v;
+}
+
+/**
+ * Build one prism "column" geometry for a single DEM grid cell, using only
+ * the corners that are valid (mask === 1 AND elevation is a finite,
+ * non-negative number).
+ *
+ * Returns a ConvexGeometry, or null if fewer than 3 corners are valid
+ * (not enough points to form a solid).
+ */
+function buildPrismGeometry(x, y, xCount, yCount, elevationArr, maskArr, xStep, yStep, zBase) {
+  const points = [];
+
+  for (const corner of CELL_CORNERS) {
+    const cx = x + corner.dx;
+    const cy = y + corner.dy;
+    const maskVal = getXY(maskArr, cx, cy, xCount, yCount);
+    const elev = getXY(elevationArr, cx, cy, xCount, yCount);
+
+    const isValid = maskVal === 1 && Number.isFinite(elev) && elev >= 0;
+    if (!isValid) continue;
+
+    const px = cx * xStep;
+    const py = cy * yStep;
+    points.push(new THREE.Vector3(px, py, zBase)); // base point
+    points.push(new THREE.Vector3(px, py, elev)); // elevation point
+  }
+
+  // Need at least 3 corners (6 points) to form a meaningful solid.
+  if (points.length < 6) return null;
+
+  return new ConvexGeometry(points);
+}
+
+
+/* ============================================================
+ * SECTION 4: MESH BUILDER
+ * Turns elevation + mask data (+ a geoContext from Section 2) into
+ * THREE.Mesh objects and adds them to the scene (Section 1's `scene`).
+ * ============================================================ */
+
+/**
+ * Build a single mesh from elevation + binary mask data.
+ * If normalizeToPhysical is true, scales/translates the merged geometry
+ * to match geoContext.physicalWidth/physicalHeight (used for the
+ * non-partitioned, single-piece case).
+ *
+ * Sets the module-level `singletonMesh` (Section 1 state) and adds it
+ * to the scene. Returns the mesh (or null if no valid geometry).
+ */
+function createMesh(base, demWidth, demHeight, elevationArr, maskArr, geoContext, normalizeToPhysical) {
+  if (singletonMesh) scene.remove(singletonMesh);
+
+  const zBase = -Math.abs(parseFloat(base));
+  // Number of pixels
+  const xCount = parseInt(demWidth);
+  const yCount = parseInt(demHeight);
+
+  // Physical size (in meters) of each pixel in the mesh
+  const xStep = geoContext.metersPerWidthPixel;
+  const yStep = geoContext.metersPerHeightPixel;
+
+  const geometriesArray = [];
+
+  for (let x = 0; x < xCount; x++) {
+    for (let y = 0; y < yCount; y++) {
+      const geom = buildPrismGeometry(x, y, xCount, yCount, elevationArr, maskArr, xStep, yStep, zBase);
+      if (geom) geometriesArray.push(geom);
+    }
+  }
+
+  if (geometriesArray.length === 0) {
+    singletonMesh = null;
+    return null;
+  }
+
+  const mergedGeometry = BufferGeometryUtils.mergeGeometries(geometriesArray);
+  const color = new THREE.Color().setHSL((0 * 0.618033988749895) % 1, 0.5, 0.5);
+  const mergedMaterial = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide });
+  mergedMaterial.needsUpdate = true;
+
+  // Only run this when creating singleton, not partitioned meshes
+  // Scale to desired physical dimensions
+  if (normalizeToPhysical) {
+    mergedGeometry.computeBoundingBox();
+    const bb = mergedGeometry.boundingBox;
+    mergedGeometry.translate(-bb.min.x, -bb.min.y, 0); // Shift to origin
+
+    // const scaleToPhysicalX = geoContext.physicalWidth / geoContext.shapeWidthInMeters;
+    // const scaleToPhysicalY = geoContext.physicalHeight / geoContext.shapeHeightInMeters;
+    // mergedGeometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
+
+    mergedGeometry.scale(geoContext.geospatialCorrection, geoContext.geospatialCorrection, 1);
+  }
+
+  const mergedMesh = new THREE.Mesh(mergedGeometry, mergedMaterial);
+  mergedMesh.rotateX(3 * Math.PI / 2);
+  singletonMesh = mergedMesh;
+
+  scene.add(singletonMesh);
+  dlog("Created singleton mesh:", singletonMesh);
+  return singletonMesh;
+}
+
+/**
+ * Build one binary mask per label in a label map, call createMesh() for
+ * each, and collect the results into partitionMeshes (Section 1 state).
+ *
+ * label_map: 2D array [rows][cols]
+ * elevationArr: flattened 1D elevation array (same ordering createMesh expects)
+ */
+function createMeshesFromLabelMap(label_map, elevationArr, demWidth, demHeight, geoContext, base) {
+  dlog("Partitioning...");
+
+  if (!label_map) {
+    console.warn("No label map provided");
+    return [];
+  }
+
+  // Flatten label map to row-major array (same ordering as elevationArr)
+  const labelFlat = [];
+  for (let i = 0; i < label_map.length; i++) {
+    for (let j = 0; j < label_map[i].length; j++) {
+      labelFlat.push(label_map[i][j]);
+    }
+  }
+
+  const total = parseInt(demWidth) * parseInt(demHeight);
+  if (labelFlat.length !== total) {
+    console.warn("Label map size doesn't match demWidth*demHeight:", labelFlat.length, "vs", total);
+  }
+
+  // Collect unique non-negative labels
+  const labelSet = new Set();
+  for (let i = 0; i < Math.min(labelFlat.length, total); i++) {
+    const v = labelFlat[i];
+    if (typeof v === 'number' && v >= 0) labelSet.add(Math.trunc(v));
+  }
+  const labels = Array.from(labelSet).sort((a, b) => a - b);
+
+  // For each label, build binary mask and call createMesh.
+  // We rely on createMesh to produce singletonMesh; after each call we clone and keep a copy
+  for (const labelId of labels) {
+    const mask = new Array(total).fill(0);
+    for (let i = 0; i < total && i < labelFlat.length; i++) {
+      if (labelFlat[i] === labelId) mask[i] = 1;
+    }
+
+    // createMesh removes any existing singletonMesh and sets a new one
+    createMesh(base, demWidth, demHeight, elevationArr, mask, geoContext, false);
+
+    // if createMesh produced a singletonMesh, clone it and keep it under this label
+    if (singletonMesh) {
+      const copy = singletonMesh.clone(true);
+      copy.material = singletonMesh.material.clone();
+      copy.material.color = new THREE.Color().setHSL((labelId * 0.618033988749895) % 1, 0.5, 0.5);
+      copy.name = `partition_${labelId}`;
+      scene.add(copy);
+      partitionMeshes.push(copy);
+    }
+  }
+
+  // Normalize to desired physical dimensions
+  // Compute collective bounding box across all partition meshes
+  const collectiveBB = new THREE.Box3();
+  for (const mesh of partitionMeshes) {
+    mesh.geometry.computeBoundingBox();
+    collectiveBB.union(mesh.geometry.boundingBox);
+  }
+  const offsetX = collectiveBB.min.x;
+  const offsetY = collectiveBB.min.y;
+
+  // Use geographic extent directly
+  // const scaleToPhysicalX = geoContext.physicalWidth / geoContext.shapeWidthInMeters;
+  // const scaleToPhysicalY = geoContext.physicalHeight / geoContext.shapeHeightInMeters;
+
+  for (const mesh of partitionMeshes) {
+    mesh.geometry.translate(-offsetX, -offsetY, 0);
+    // mesh.geometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
+    mesh.geometry.scale(geoContext.geospatialCorrection, geoContext.geospatialCorrection, 1);
+  }
+
+  // The last singletonMesh produced by the loop is a leftover working copy
+  // (we saved clones into partitionMeshes already) so remove it.
+  if (singletonMesh) {
+    scene.remove(singletonMesh);
+    singletonMesh = null;
+  }
+
+  return partitionMeshes;
+}
+
+
+/* ============================================================
+ * SECTION 5: ORCHESTRATION
+ * generateDEM() — the entry point called by the UI. Reads DOM inputs,
+ * builds the geoContext (Section 2), prepares elevation/mask data
+ * (Section 3 helpers), and delegates mesh creation (Section 4) and
+ * scene management (Section 1).
+ * ============================================================ */
+
+// Helper: Prepare elevation for partitioned mesh creation by applying
+// binary mask and converting NoData values to NaN.
 function applyMaskToElevation(elevation, mask) {
   const maskedElevation = [];
   for (let i = 0; i < elevation.length; i++) {
-    if (mask[i] === 0 || elevation[i] < -2e+30) { // no data values
+    if (mask[i] === 0 || elevation[i] < NODATA_THRESHOLD) {
       maskedElevation.push(NaN);
-    }
-    else if (mask[i] === 1) {
+    } else if (mask[i] === 1) {
       maskedElevation.push(elevation[i]);
-    }
-    else {
-      console.log("Unexpected mask value at index", i, "mask:", mask[i], "elevation:", elevation[i]);
+    } else {
+      console.warn("Unexpected mask value at index", i, "mask:", mask[i], "elevation:", elevation[i]);
     }
   }
   return maskedElevation;
 }
 
-// Helper: Convert 1D elevation array into 2D array (for partitioning)
+// Helper: Convert 1D elevation array into 2D array (for partitioning).
 function convertElevationInto2DArray(myElevation, demWidth, demHeight) {
   const elevation2D = [];
   for (let i = 0; i < demHeight; i++) {
@@ -552,30 +534,74 @@ function convertElevationInto2DArray(myElevation, demWidth, demHeight) {
   return elevation2D;
 }
 
-// Helper to get DEM aspect ratio for model dimension sync
-export function getAspectRatio() {
+// Main entry point
+export async function generateDEM() {
+  showOverlay("Generating...");
+
+  // Get selected geotiff and shape
   const selectedGeotiff = getSelectedGeotiff();
-  if (!selectedGeotiff) return 1;
-  const georaster = selectedGeotiff.georasters[0];
-  const centerLat = (georaster.ymin + georaster.ymax) / 2;
-  const circumference = 40075017;
-  const metersPerDegreeLat = 111320;
-  const metersPerDegreeLon = Math.abs(circumference * Math.cos(centerLat * Math.PI / 180) / 360);
-  // Get the bounding box of the selected shape, in degrees. Clamp shape bbox to geotiff bbox
   const selectedShape = getSelectedShape();
-  const shapeBBox = selectedShape.getBounds();
-  const minX = Math.max(shapeBBox.getWest(),  georaster.xmin);
-  const maxX = Math.min(shapeBBox.getEast(),  georaster.xmax);
-  const minY = Math.max(shapeBBox.getSouth(), georaster.ymin);
-  const maxY = Math.min(shapeBBox.getNorth(), georaster.ymax);
-  const shapeWidthDeg = maxX - minX;
-  const shapeHeightDeg = maxY - minY;
+  if (!selectedGeotiff) {
+    window.alert("Please upload a geotiff in Step 1 first.");
+    return;
+  }
+  else if (!selectedShape) {
+    window.alert("Please select a shape in Step 2 first.");
+    return;
+  }
 
-  // Convert shape extent to meters
-  const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
-  const shapeHeightInMeters = shapeHeightDeg * metersPerDegreeLat;
+  switchToTab("demView"); // Switch to the 3D Model tab
 
-  const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
+  // Read user input values
+  const base = parseFloat(document.getElementById("baseThicknessInput").value); // mm
+  const verticalExaggeration = parseFloat(getCurrentVerticalExaggeration());     // scale factor
+  const bedWidth = parseFloat(document.getElementById("bedWidthInput").value);   // mm
+  const bedHeight = parseFloat(document.getElementById("bedHeightInput").value); // mm
+  const physicalWidth = parseFloat(document.getElementById("physicalWidthInput").value); // mm
+  const physicalWidthInput = document.getElementById("physicalWidthInput"); // html input element
+  const physicalHeight = parseFloat(document.getElementById("physicalHeightInput").value); // mm
+  const physicalHeightInput = document.getElementById("physicalHeightInput"); // html input element
 
-  return aspectRatio;
+  // Extract geotiff data
+  const georaster = selectedGeotiff.georasters[0];
+  const demWidth = georaster.width;
+  const demHeight = georaster.height;
+
+  // Build geospatial scaling context (Section 2)
+  const geoContext = buildGeoContext(georaster, selectedShape, physicalWidth, physicalHeight);
+  physicalWidthInput.value = geoContext.physicalWidth;
+  physicalHeightInput.value = geoContext.physicalHeight;
+
+  // Flatten + scale elevation. Only Z (elevation) is scaled here;
+  // X/Y scaling is handled inside mesh creation via geoContext.
+  let myElevation = georaster.values[0];
+  const flattenedElevation = [];
+  for (let i = 0; i < myElevation.length; i++) {
+    for (let j = 0; j < myElevation[i].length; j++) {
+      flattenedElevation.push(myElevation[i][j] * geoContext.geospatialCorrection * verticalExaggeration);
+    }
+  }
+  myElevation = flattenedElevation;
+
+  const myMask = createBinaryMask(georaster, selectedShape);
+
+  clearMeshes();
+
+  if (geoContext.physicalWidth <= bedWidth && geoContext.physicalHeight <= bedHeight) {
+    // No partitioning needed, single piece fits the print bed
+    createMesh(base, demWidth, demHeight, myElevation, myMask, geoContext, true);
+    centerSingletonMesh();
+  }
+  else {
+    // Partitioning needed, send to backend for partition computation
+    const maskedElevation = applyMaskToElevation(myElevation, myMask);
+    const maskedElevation2D = convertElevationInto2DArray(maskedElevation, demWidth, demHeight);
+    let result = await sendMeshToBackend(maskedElevation2D, geoContext.physicalWidth, geoContext.physicalHeight, bedWidth, bedHeight);
+    const best_cut = result.best_cut;
+
+    createMeshesFromLabelMap(best_cut, maskedElevation, demWidth, demHeight, geoContext, base);
+    centerPartitionedMeshes();
+  }
+
+  hideOverlay(); // hides "Generating..." message
 }
