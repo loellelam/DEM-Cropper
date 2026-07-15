@@ -26,7 +26,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 
-// Debug logging — flip to true to re-enable verbose console output
+// Debug logging: flip to true to enable console output
 const DEBUG = false;
 function dlog(...args) { if (DEBUG) console.log(...args); }
 
@@ -177,38 +177,109 @@ function metersPerDegreeLonAt(latitudeDeg) {
   return Math.abs(EARTH_CIRCUMFERENCE_M * Math.cos(latitudeDeg * Math.PI / 180) / 360);
 }
 
+// Build a mask that is the intersection of selected shape and valid elevations
+function buildLandMask(georaster, shapeMask) {
+  const elevation = georaster.values[0];
+  const landMask = [];
+  for (let i = 0; i < elevation.length; i++) {
+    for (let j = 0; j < elevation[i].length; j++) {
+      const elev = elevation[i][j];
+      const idx = i * elevation[i].length + j;
+      const validElev = Number.isFinite(elev) && elev > NODATA_THRESHOLD;
+      if (shapeMask[idx] === 1 && validElev) {
+        landMask.push(1);
+      }
+      else {
+        landMask.push(0);
+      }
+    }
+  }
+  return landMask;
+}
+
+// Unflatten a 1D mask array into a 2D array based on the georaster dimensions
+function unflatten(mask, georaster){
+  const mask2D = [];
+  const width  = georaster.width;
+  const height = georaster.height;
+  for (let i = 0; i < height; i++) {
+    const row = [];
+    for (let j = 0; j < width; j++) {
+      const index = i * width + j;
+      row.push(mask[index]);
+    }
+    mask2D.push(row);
+  }
+  return mask2D;
+}
+// Convert pixel coordinates to lat/lng
+function pixelToLatLng(georaster, x, y) {
+  const minLng = georaster.xmin, maxLat = georaster.ymax;
+  const maxLng = georaster.xmax, minLat = georaster.ymin;
+
+  const width  = georaster.width;
+  const height = georaster.height;
+  const lng = ((x + 0.5) / width)  * (maxLng - minLng) + minLng;
+  const lat = maxLat - ((y + 0.5) / height) * (maxLat - minLat);
+  return { lat, lng };
+}
+// Get the bounding box of the mask
+function getMaskBounds(mask,georaster) {
+  let minRow = Infinity, maxRow = -Infinity;
+  let minCol = Infinity, maxCol = -Infinity;
+
+  const mask2D = unflatten(mask, georaster);
+
+  for (let i=0; i < mask2D.length; i++){
+    for (let j=0; j < mask2D[0].length; j++){
+      if (mask2D[i][j] === 1){
+        if (i < minRow) minRow = i;
+        if (i > maxRow) maxRow = i;
+        if (j < minCol) minCol = j;
+        if (j > maxCol) maxCol = j;
+      }
+    }
+  }
+  
+  if (minRow === Infinity) return null; // no valid pixels found
+
+  return {
+    topLeft:     { row: minRow, col: minCol },
+    bottomRight: { row: maxRow, col: maxCol }
+  };
+}
+
 /**
  * Compute the extent (in meters) of the selected shape, clamped to the
  * geotiff's own bounding box.
  *
  * Returns { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon }
  */
-function getShapeExtentInMeters(georaster, selectedShape) {
+function getShapeExtentInMeters(georaster, mask) {
   const centerLat = (georaster.ymin + georaster.ymax) / 2;
   const metersPerDegreeLon = metersPerDegreeLonAt(centerLat);
 
-  const shapeBBox = selectedShape.getBounds();
-  const minX = Math.max(shapeBBox.getWest(), georaster.xmin);
-  const maxX = Math.min(shapeBBox.getEast(), georaster.xmax);
-  const minY = Math.max(shapeBBox.getSouth(), georaster.ymin);
-  const maxY = Math.min(shapeBBox.getNorth(), georaster.ymax);
+  const bounds = getMaskBounds(mask, georaster);
+  const { lat: minLng, lng: minLat } = pixelToLatLng(georaster, bounds.topLeft.col, bounds.topLeft.row);
+  const { lat: maxLng, lng: maxLat } = pixelToLatLng(georaster, bounds.bottomRight.col, bounds.bottomRight.row);
 
-  const shapeWidthDeg = maxX - minX;
-  const shapeHeightDeg = maxY - minY;
+  // the max and min actually depend on the location in the world...
+  const shapeWidthDeg = Math.max(maxLat,minLat) - Math.min(maxLat,minLat);
+  const shapeHeightDeg = Math.max(maxLng,minLng) - Math.min(maxLng,minLng);
 
   // For testing: Visually display constrained area
   const clampedBounds = L.latLngBounds(
-    [minY, minX],
-    [maxY, maxX]
+    [minLng, minLat],
+    [maxLng, maxLat]
   );
   if (clampedShape) {
       map.removeLayer(clampedShape);
   }
-  clampedShape = L.rectangle(clampedBounds, {
-      color: "red",
-      weight: 2,
-      fill: false
-  }).addTo(map);
+  // clampedShape = L.rectangle(clampedBounds, {
+  //     color: "red",
+  //     weight: 2,
+  //     fill: false
+  // }).addTo(map);
 
   const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
   const shapeHeightInMeters = shapeHeightDeg * METERS_PER_DEGREE_LAT;
@@ -230,8 +301,8 @@ function getShapeExtentInMeters(georaster, selectedShape) {
  * physicalWidth - user-specified physical width (mm), or calculated based on aspect ratio
  * physicalHeight - user-specified physical height (mm), or calculated based on aspect ratio
  */
-function buildGeoContext(georaster, selectedShape, physicalWidth, physicalHeight) {
-  const { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon } = getShapeExtentInMeters(georaster, selectedShape);
+function buildGeoContext(georaster, physicalWidth, physicalHeight, mask) {
+  const { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon } = getShapeExtentInMeters(georaster, mask);
 
   const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
   let geospatialCorrection;
@@ -259,14 +330,18 @@ function buildGeoContext(georaster, selectedShape, physicalWidth, physicalHeight
   };
 }
 
-// Helper to get DEM aspect ratio for model dimension sync.
+// Helper to get DEM aspect ratio for model dimension sync
+// model-dimension-sync.js updates desired physical width when user enters height and vice versa
 export function getAspectRatio() {
   const selectedGeotiff = getSelectedGeotiff();
   if (!selectedGeotiff) return 1;
   const georaster = selectedGeotiff.georasters[0];
   const selectedShape = getSelectedShape();
+  if (!selectedShape) return 1;
+  const shapeMask = createBinaryMask(georaster, selectedShape);
+  const landMask = buildLandMask(georaster, shapeMask);
 
-  const { shapeWidthInMeters, shapeHeightInMeters } = getShapeExtentInMeters(georaster, selectedShape);
+  const { shapeWidthInMeters, shapeHeightInMeters } = getShapeExtentInMeters(georaster, landMask);
   const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
   return aspectRatio;
 }
@@ -536,8 +611,6 @@ function convertElevationInto2DArray(myElevation, demWidth, demHeight) {
 
 // Main entry point
 export async function generateDEM() {
-  showOverlay("Generating...");
-
   // Get selected geotiff and shape
   const selectedGeotiff = getSelectedGeotiff();
   const selectedShape = getSelectedShape();
@@ -549,8 +622,6 @@ export async function generateDEM() {
     window.alert("Please select a shape in Step 2 first.");
     return;
   }
-
-  switchToTab("demView"); // Switch to the 3D Model tab
 
   // Read user input values
   const base = parseFloat(document.getElementById("baseThicknessInput").value); // mm
@@ -567,8 +638,12 @@ export async function generateDEM() {
   const demWidth = georaster.width;
   const demHeight = georaster.height;
 
+  // Mask must exist before and be used in geoContext calculations
+  const shapeMask = createBinaryMask(georaster, selectedShape); // Mask the georaster with the selected shape
+  const landMask = buildLandMask(georaster, shapeMask); // Build a mask that is the intersection of selected shape and valid elevations
+
   // Build geospatial scaling context (Section 2)
-  const geoContext = buildGeoContext(georaster, selectedShape, physicalWidth, physicalHeight);
+  const geoContext = buildGeoContext(georaster, physicalWidth, physicalHeight, landMask);
   physicalWidthInput.value = geoContext.physicalWidth;
   physicalHeightInput.value = geoContext.physicalHeight;
 
@@ -583,23 +658,36 @@ export async function generateDEM() {
   }
   myElevation = flattenedElevation;
 
-  const myMask = createBinaryMask(georaster, selectedShape);
-
   clearMeshes();
+
+  showOverlay("Generating...");
+  switchToTab("demView"); // Switch to the 3D Model tab
 
   if (geoContext.physicalWidth <= bedWidth && geoContext.physicalHeight <= bedHeight) {
     // No partitioning needed, single piece fits the print bed
-    createMesh(base, demWidth, demHeight, myElevation, myMask, geoContext, true);
+    createMesh(base, demWidth, demHeight, myElevation, landMask, geoContext, true);
+    if (!singletonMesh) {
+      window.alert("Unable to create 3D model.");
+      showOverlay("Generate a mesh first");
+      switchToTab("mapView");
+      return;
+    }
     centerSingletonMesh();
   }
   else {
     // Partitioning needed, send to backend for partition computation
-    const maskedElevation = applyMaskToElevation(myElevation, myMask);
+    const maskedElevation = applyMaskToElevation(myElevation, landMask);
     const maskedElevation2D = convertElevationInto2DArray(maskedElevation, demWidth, demHeight);
     let result = await sendMeshToBackend(maskedElevation2D, geoContext.physicalWidth, geoContext.physicalHeight, bedWidth, bedHeight);
     const best_cut = result.best_cut;
 
     createMeshesFromLabelMap(best_cut, maskedElevation, demWidth, demHeight, geoContext, base);
+    if (!partitionMeshes.length) {
+      window.alert("Unable to create 3D model.");
+      showOverlay("Generate a mesh first");
+      switchToTab("mapView");
+      return;
+    }
     centerPartitionedMeshes();
   }
 
