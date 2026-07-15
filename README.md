@@ -3,7 +3,7 @@
 DEM Cropper is an open-source, browser-based application for generating 3D-printable terrain models from Digital Elevation Models (DEMs). Users can upload GeoTIFF datasets, define regions of interest, generate terrain meshes, preview the results in 3D, and export STL files for 3D printing.
 
 <p align="center">
-  <img src="assets/user-workflow.jpg" alt="DEM Cropper" width="700">
+  <img src="public/user-workflow.jpg" alt="DEM Cropper" width="700">
 </p>
 
 ## Features

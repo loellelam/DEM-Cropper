@@ -75,7 +75,7 @@ export function fileHandler() {
       item.classList.add("loading");
 
       try {
-        const response = await fetch(`assets/${item.dataset.file}`);
+        const response = await fetch(`public/${item.dataset.file}`);
         const arrayBuffer = await response.arrayBuffer();
 
         await loadGeoTiff(arrayBuffer, item.dataset.file);
