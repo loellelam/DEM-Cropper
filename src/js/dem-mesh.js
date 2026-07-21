@@ -1,14 +1,13 @@
 /*
 * This file visualizes DEMs as 3D meshes.
-* always correct aspect ratio
-* incorrect phys dims
 *
-* Organized into 5 sections:
+* Organized into 6 sections:
 *   1. SCENE          - Three.js scene/camera/renderer lifecycle
 *   2. GEO MATH       - pure geospatial math
 *   3. PRISM GEOMETRY - truncated triangular prism geometry creation
 *   4. MESH BUILDER   - turns elevation + mask + geoContext into THREE meshes
 *   5. ORCHESTRATION  - generateDEM() entry point, reads DOM, wires it together
+*   6. SIMPLE PARTITIONING - basic grid-based partitioning for DEMs
 */
 
 import { map } from "./map.js"; // for testing, for clamped shape
@@ -268,18 +267,20 @@ function getShapeExtentInMeters(georaster, mask) {
   const shapeHeightDeg = Math.max(maxLng,minLng) - Math.min(maxLng,minLng);
 
   // For testing: Visually display constrained area
-  const clampedBounds = L.latLngBounds(
-    [minLng, minLat],
-    [maxLng, maxLat]
-  );
-  if (clampedShape) {
-      map.removeLayer(clampedShape);
+  if (DEBUG) {
+    const clampedBounds = L.latLngBounds(
+      [minLng, minLat],
+      [maxLng, maxLat]
+    );
+    if (clampedShape) {
+        map.removeLayer(clampedShape);
+    }
+    clampedShape = L.rectangle(clampedBounds, {
+        color: "red",
+        weight: 2,
+        fill: false
+    }).addTo(map);
   }
-  // clampedShape = L.rectangle(clampedBounds, {
-  //     color: "red",
-  //     weight: 2,
-  //     fill: false
-  // }).addTo(map);
 
   const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
   const shapeHeightInMeters = shapeHeightDeg * METERS_PER_DEGREE_LAT;
@@ -632,6 +633,7 @@ export async function generateDEM() {
   const physicalWidthInput = document.getElementById("physicalWidthInput"); // html input element
   const physicalHeight = parseFloat(document.getElementById("physicalHeightInput").value); // mm
   const physicalHeightInput = document.getElementById("physicalHeightInput"); // html input element
+  const partitioningMode = document.querySelector('input[name="partitioning"]:checked').value; // "simple" or "complex"
 
   // Extract geotiff data
   const georaster = selectedGeotiff.georasters[0];
@@ -641,6 +643,11 @@ export async function generateDEM() {
   // Mask must exist before and be used in geoContext calculations
   const shapeMask = createBinaryMask(georaster, selectedShape); // Mask the georaster with the selected shape
   const landMask = buildLandMask(georaster, shapeMask); // Build a mask that is the intersection of selected shape and valid elevations
+
+  if (!landMask.includes(1)) {
+    window.alert("Selected shape does not intersect with any valid elevation data.");
+    return;
+  }
 
   // Build geospatial scaling context (Section 2)
   const geoContext = buildGeoContext(georaster, physicalWidth, physicalHeight, landMask);
@@ -675,12 +682,19 @@ export async function generateDEM() {
     centerSingletonMesh();
   }
   else {
-    // Partitioning needed, send to backend for partition computation
+    // Partitioning needed
     const maskedElevation = applyMaskToElevation(myElevation, landMask);
     const maskedElevation2D = convertElevationInto2DArray(maskedElevation, demWidth, demHeight);
-    let result = await sendMeshToBackend(maskedElevation2D, geoContext.physicalWidth, geoContext.physicalHeight, bedWidth, bedHeight);
-    const best_cut = result.best_cut;
-
+    let best_cut;
+    if (partitioningMode === "simple") {
+      best_cut = partitionIntoRectangles(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight).best_cut;
+    }
+    else if (partitioningMode === "complex") {
+      // Send to backend
+      let result = await sendMeshToBackend(maskedElevation2D, geoContext.physicalWidth, geoContext.physicalHeight, bedWidth, bedHeight);
+      best_cut = result.best_cut;
+    }
+    
     createMeshesFromLabelMap(best_cut, maskedElevation, demWidth, demHeight, geoContext, base);
     if (!partitionMeshes.length) {
       window.alert("Unable to create 3D model.");
@@ -691,5 +705,101 @@ export async function generateDEM() {
     centerPartitionedMeshes();
   }
 
+  if (DEBUG) printMeshDimensions();
+
   hideOverlay(); // hides "Generating..." message
+}
+
+// Print the dimensions (in scene units = mm) of all generated meshes
+function printMeshDimensions() {
+  // ---------- Singleton ----------
+  if (singletonMesh) {
+    singletonMesh.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(singletonMesh);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+
+    console.log("===== Singleton Mesh =====");
+    console.log({
+      width_mm: size.x,
+      height_mm: size.z,
+      depth_mm: size.y
+    });
+  } else {
+    console.log("No singleton mesh.");
+  }
+
+  // ---------- Partition Meshes ----------
+  if (!partitionMeshes || partitionMeshes.length === 0) {
+    console.log("No partition meshes.");
+    return;
+  }
+
+  console.log("===== Partition Meshes =====");
+
+  const overallBox = new THREE.Box3();
+
+  partitionMeshes.forEach((mesh, index) => {
+    mesh.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(mesh);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+
+    console.log(`Partition ${index}:`, {
+      width_mm: size.x,
+      height_mm: size.z,
+      depth_mm: size.y
+    });
+
+    overallBox.union(box);
+  });
+
+  const overallSize = new THREE.Vector3();
+  overallBox.getSize(overallSize);
+
+  console.log("===== Overall Partition Extents =====");
+  console.log({
+    width_mm: overallSize.x,
+    height_mm: overallSize.z,
+    depth_mm: overallSize.y
+  });
+}
+
+/* ============================================================
+ * SECTION 6: SIMPLE PARTITIONING
+ * partitionIntoRectangles(): partitions into a simple rectangular grid
+ * sized to fit the print bed. Returns { best_cut: label_map } where
+ * label_map is a 2D array: label_map[row][col], same shape as maskedElevation2D.
+ * ============================================================ */
+
+function partitionIntoRectangles(maskedElevation2D, physicalWidth, physicalHeight, bedWidth, bedHeight) {
+  var demHeight = maskedElevation2D.length;       // number of rows
+  var demWidth = maskedElevation2D[0].length;     // number of cols
+
+  var cols = Math.max(1, Math.ceil(physicalWidth / bedWidth));
+  var rows = Math.max(1, Math.ceil(physicalHeight / bedHeight));
+  var cellWidthMM = physicalWidth / cols;
+  var cellHeightMM = physicalHeight / rows;
+  var pixelWidthMM = physicalWidth / demWidth;
+  var pixelHeightMM = physicalHeight / demHeight;
+
+  var label_map = [];                              // will be a 2D array: label_map[row][col]
+  var i, j, rowIdx, colIdx, row, isNoData;
+
+  for (i = 0; i < demHeight; i++) {
+    row = [];                                       // one row of the 2D array
+    rowIdx = Math.min(rows - 1, Math.floor((i * pixelHeightMM) / cellHeightMM));
+
+    for (j = 0; j < demWidth; j++) {
+      colIdx = Math.min(cols - 1, Math.floor((j * pixelWidthMM) / cellWidthMM));
+      isNoData = isNaN(maskedElevation2D[i][j]);
+      row.push(isNoData ? -1 : rowIdx * cols + colIdx);
+    }
+
+    label_map.push(row);                            // append row -> label_map is now 2D
+  }
+
+  return { best_cut: label_map };
 }

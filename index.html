@@ -192,6 +192,35 @@
                 <span>mm</span>
               </div>
 
+              <!-- Allow users to select type of partitioning -->
+              <br />
+              <div>
+                <span>Partitioning</span>
+                <span style="position:relative; cursor:pointer;">
+                  <i class="fas fa-info-circle" style="color:#888;"
+                    onmouseover="this.nextElementSibling.style.display='block'" 
+                    onmouseout="this.nextElementSibling.style.display='none'">
+                  </i>
+                  <span class="tooltip">
+                    When physical dimensions exceed the printer bed, partitioning is necessary.
+                    <strong>Simple partitioning</strong> divides the model into rectangular sections,
+                    making the process fast and predictable.
+                    <strong>Complex partitioning</strong> follows the model's geometry to create more
+                    natural split lines, which can reduce visible seams, but requires more processing time.
+                  </span>
+                </span>
+                <div>
+                  <label>
+                    <input type="radio" name="partitioning" value="simple">
+                    Simple
+                  </label>
+                  <label>
+                    <input type="radio" name="partitioning" value="complex" checked>
+                    Complex
+                  </label>
+                </div>
+              </div>
+
               <br />
               <button id="regenerateButton"><i class="fas fa-hammer"></i> Generate 3D Model</button>
 
