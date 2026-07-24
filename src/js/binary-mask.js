@@ -2,13 +2,20 @@
 * This file defines a function that creates a binary mask for a given shape over a Geotiff raster
 */
 
-export function createBinaryMask(geoRaster, shape) {
-  // Extract geotiff dimensions and bounds
-  const width = geoRaster.width;
-  const height = geoRaster.height;
-  const bounds = shape.getBounds(); // Get geographic bounds
-  const minLng = geoRaster.xmin, maxLat = geoRaster.ymax;
-  const maxLng = geoRaster.xmax, minLat = geoRaster.ymin;
+export function createBinaryMask(geotiff, shape) {
+  // Extract geotiff dimensions and shape bounds
+  const georaster = geotiff.georasters[0];
+  const width = georaster.width;
+  const height = georaster.height;
+  const shapeBounds = shape.getBounds(); // Get geographic bounds of shape
+  
+  // Get geographic bounds of geotiff
+  // Cannot use georaster.xmin bc xmin varies depending on projection
+  const geotiffBounds = geotiff.getBounds(); 
+  const minLat = geotiffBounds.getSouth();
+  const maxLat = geotiffBounds.getNorth();
+  const minLng = geotiffBounds.getWest();
+  const maxLng = geotiffBounds.getEast();
 
   // Initialize mask array with 0s
   let mask = Array.from({ length: height }, () => Array(width).fill(0));
@@ -88,8 +95,8 @@ export function createBinaryMask(geoRaster, shape) {
 
   // Get pixel bounds of the shape
   // These bounds define the area of the raster grid that needs to be checked
-  const topLeft = latLngToPixel(bounds.getNorth(), bounds.getWest());
-  const bottomRight = latLngToPixel(bounds.getSouth(), bounds.getEast());
+  const topLeft = latLngToPixel(shapeBounds.getNorth(), shapeBounds.getWest());
+  const bottomRight = latLngToPixel(shapeBounds.getSouth(), shapeBounds.getEast());
 
   // For each polygon, iterate through the bounding box and check if each pixel is inside the polygon
   for (let i = 0; i < polygonPixels.length; i++) {

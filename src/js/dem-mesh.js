@@ -2,11 +2,11 @@
 * This file visualizes DEMs as 3D meshes.
 *
 * Organized into 6 sections:
-*   1. SCENE          - Three.js scene/camera/renderer lifecycle
-*   2. GEO MATH       - pure geospatial math
-*   3. PRISM GEOMETRY - truncated triangular prism geometry creation
-*   4. MESH BUILDER   - turns elevation + mask + geoContext into THREE meshes
-*   5. ORCHESTRATION  - generateDEM() entry point, reads DOM, wires it together
+*   1. SCENE               - Three.js scene/camera/renderer lifecycle
+*   2. GEO MATH            - pure geospatial math
+*   3. PRISM GEOMETRY      - truncated triangular prism geometry creation
+*   4. MESH BUILDER        - turns elevation + mask + geoContext into THREE meshes
+*   5. ORCHESTRATION       - generateDEM() entry point, reads DOM, wires it together
 *   6. SIMPLE PARTITIONING - basic grid-based partitioning for DEMs
 */
 
@@ -212,9 +212,14 @@ function unflatten(mask, georaster){
   return mask2D;
 }
 // Convert pixel coordinates to lat/lng
-function pixelToLatLng(georaster, x, y) {
-  const minLng = georaster.xmin, maxLat = georaster.ymax;
-  const maxLng = georaster.xmax, minLat = georaster.ymin;
+function pixelToLatLng(selectedGeotiff, x, y) {
+  const georaster = selectedGeotiff.georasters[0];
+
+  const geotiffBounds = selectedGeotiff.getBounds();
+  const minLat = geotiffBounds.getSouth();
+  const maxLat = geotiffBounds.getNorth();
+  const minLng = geotiffBounds.getWest();
+  const maxLng = geotiffBounds.getEast();
 
   const width  = georaster.width;
   const height = georaster.height;
@@ -223,7 +228,7 @@ function pixelToLatLng(georaster, x, y) {
   return { lat, lng };
 }
 // Get the bounding box of the mask
-function getMaskBounds(mask,georaster) {
+function getMaskBounds(mask, georaster) {
   let minRow = Infinity, maxRow = -Infinity;
   let minCol = Infinity, maxCol = -Infinity;
 
@@ -252,15 +257,21 @@ function getMaskBounds(mask,georaster) {
  * Compute the extent (in meters) of the selected shape, clamped to the
  * geotiff's own bounding box.
  *
- * Returns { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon }
+ * Returns { shapeWidthInMeters, shapeHeightInMeters }
  */
-function getShapeExtentInMeters(georaster, mask) {
-  const centerLat = (georaster.ymin + georaster.ymax) / 2;
+function getShapeExtentInMeters(selectedGeotiff, mask) {
+  const georaster = selectedGeotiff.georasters[0];
+
+  const geotiffBounds = selectedGeotiff.getBounds();
+  const tiffMinLat = geotiffBounds.getSouth();
+  const tiffMaxLat = geotiffBounds.getNorth();
+
+  const centerLat = (tiffMinLat + tiffMaxLat) / 2;
   const metersPerDegreeLon = metersPerDegreeLonAt(centerLat);
 
   const bounds = getMaskBounds(mask, georaster);
-  const { lat: minLng, lng: minLat } = pixelToLatLng(georaster, bounds.topLeft.col, bounds.topLeft.row);
-  const { lat: maxLng, lng: maxLat } = pixelToLatLng(georaster, bounds.bottomRight.col, bounds.bottomRight.row);
+  const { lat: minLng, lng: minLat } = pixelToLatLng(selectedGeotiff, bounds.topLeft.col, bounds.topLeft.row);
+  const { lat: maxLng, lng: maxLat } = pixelToLatLng(selectedGeotiff, bounds.bottomRight.col, bounds.bottomRight.row);
 
   // the max and min actually depend on the location in the world...
   const shapeWidthDeg = Math.max(maxLat,minLat) - Math.min(maxLat,minLat);
@@ -285,7 +296,28 @@ function getShapeExtentInMeters(georaster, mask) {
   const shapeWidthInMeters = shapeWidthDeg * metersPerDegreeLon;
   const shapeHeightInMeters = shapeHeightDeg * METERS_PER_DEGREE_LAT;
 
-  return { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon };
+  return { shapeWidthInMeters, shapeHeightInMeters };
+}
+
+// Get the size of each pixel in meters
+function getPixelSizeInMeters(selectedGeotiff) {
+  const georaster = selectedGeotiff.georasters[0];
+  const bounds = selectedGeotiff.getBounds();
+  const minLat = bounds.getSouth();
+  const maxLat = bounds.getNorth();
+  const minLng = bounds.getWest();
+  const maxLng = bounds.getEast();
+
+  const centerLat = (minLat + maxLat) / 2;
+  const metersPerDegreeLon = metersPerDegreeLonAt(centerLat);
+
+  const widthMeters  = (maxLng - minLng) * metersPerDegreeLon;
+  const heightMeters = (maxLat - minLat) * METERS_PER_DEGREE_LAT;
+
+  return {
+    metersPerWidthPixel: widthMeters / georaster.width,
+    metersPerHeightPixel: heightMeters / georaster.height,
+  };
 }
 
 /**
@@ -302,8 +334,8 @@ function getShapeExtentInMeters(georaster, mask) {
  * physicalWidth - user-specified physical width (mm), or calculated based on aspect ratio
  * physicalHeight - user-specified physical height (mm), or calculated based on aspect ratio
  */
-function buildGeoContext(georaster, physicalWidth, physicalHeight, mask) {
-  const { shapeWidthInMeters, shapeHeightInMeters, metersPerDegreeLon } = getShapeExtentInMeters(georaster, mask);
+function buildGeoContext(selectedGeotiff, physicalWidth, physicalHeight, mask) {
+  const { shapeWidthInMeters, shapeHeightInMeters } = getShapeExtentInMeters(selectedGeotiff, mask);
 
   const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
   let geospatialCorrection;
@@ -317,8 +349,7 @@ function buildGeoContext(georaster, physicalWidth, physicalHeight, mask) {
     geospatialCorrection = physicalWidth / shapeWidthInMeters;
   }
 
-  const metersPerWidthPixel = georaster.pixelWidth * metersPerDegreeLon;
-  const metersPerHeightPixel = georaster.pixelHeight * METERS_PER_DEGREE_LAT;
+  const { metersPerWidthPixel, metersPerHeightPixel } = getPixelSizeInMeters(selectedGeotiff);
 
   return {
     geospatialCorrection,
@@ -339,10 +370,10 @@ export function getAspectRatio() {
   const georaster = selectedGeotiff.georasters[0];
   const selectedShape = getSelectedShape();
   if (!selectedShape) return 1;
-  const shapeMask = createBinaryMask(georaster, selectedShape);
+  const shapeMask = createBinaryMask(selectedGeotiff, selectedShape);
   const landMask = buildLandMask(georaster, shapeMask);
 
-  const { shapeWidthInMeters, shapeHeightInMeters } = getShapeExtentInMeters(georaster, landMask);
+  const { shapeWidthInMeters, shapeHeightInMeters } = getShapeExtentInMeters(selectedGeotiff, landMask);
   const aspectRatio = shapeHeightInMeters / shapeWidthInMeters;
   return aspectRatio;
 }
@@ -466,11 +497,6 @@ function createMesh(base, demWidth, demHeight, elevationArr, maskArr, geoContext
     mergedGeometry.computeBoundingBox();
     const bb = mergedGeometry.boundingBox;
     mergedGeometry.translate(-bb.min.x, -bb.min.y, 0); // Shift to origin
-
-    // const scaleToPhysicalX = geoContext.physicalWidth / geoContext.shapeWidthInMeters;
-    // const scaleToPhysicalY = geoContext.physicalHeight / geoContext.shapeHeightInMeters;
-    // mergedGeometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
-
     mergedGeometry.scale(geoContext.geospatialCorrection, geoContext.geospatialCorrection, 1);
   }
 
@@ -551,13 +577,8 @@ function createMeshesFromLabelMap(label_map, elevationArr, demWidth, demHeight, 
   const offsetX = collectiveBB.min.x;
   const offsetY = collectiveBB.min.y;
 
-  // Use geographic extent directly
-  // const scaleToPhysicalX = geoContext.physicalWidth / geoContext.shapeWidthInMeters;
-  // const scaleToPhysicalY = geoContext.physicalHeight / geoContext.shapeHeightInMeters;
-
   for (const mesh of partitionMeshes) {
     mesh.geometry.translate(-offsetX, -offsetY, 0);
-    // mesh.geometry.scale(scaleToPhysicalX, scaleToPhysicalY, 1);
     mesh.geometry.scale(geoContext.geospatialCorrection, geoContext.geospatialCorrection, 1);
   }
 
@@ -641,7 +662,7 @@ export async function generateDEM() {
   const demHeight = georaster.height;
 
   // Mask must exist before and be used in geoContext calculations
-  const shapeMask = createBinaryMask(georaster, selectedShape); // Mask the georaster with the selected shape
+  const shapeMask = createBinaryMask(selectedGeotiff, selectedShape); // Mask the georaster with the selected shape
   const landMask = buildLandMask(georaster, shapeMask); // Build a mask that is the intersection of selected shape and valid elevations
 
   if (!landMask.includes(1)) {
@@ -650,7 +671,7 @@ export async function generateDEM() {
   }
 
   // Build geospatial scaling context (Section 2)
-  const geoContext = buildGeoContext(georaster, physicalWidth, physicalHeight, landMask);
+  const geoContext = buildGeoContext(selectedGeotiff, physicalWidth, physicalHeight, landMask);
   physicalWidthInput.value = geoContext.physicalWidth;
   physicalHeightInput.value = geoContext.physicalHeight;
 
@@ -710,7 +731,7 @@ export async function generateDEM() {
   hideOverlay(); // hides "Generating..." message
 }
 
-// Print the dimensions (in scene units = mm) of all generated meshes
+// For debugging: Print the dimensions (in scene units = mm) of all generated meshes
 function printMeshDimensions() {
   // ---------- Singleton ----------
   if (singletonMesh) {
@@ -720,7 +741,7 @@ function printMeshDimensions() {
     const size = new THREE.Vector3();
     box.getSize(size);
 
-    console.log("===== Singleton Mesh =====");
+    console.log("===== Singleton Mesh Dimensions =====");
     console.log({
       width_mm: size.x,
       height_mm: size.z,
@@ -736,7 +757,7 @@ function printMeshDimensions() {
     return;
   }
 
-  console.log("===== Partition Meshes =====");
+  console.log("===== Partition Meshes Dimensions =====");
 
   const overallBox = new THREE.Box3();
 

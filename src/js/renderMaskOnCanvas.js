@@ -1,7 +1,7 @@
 /*
  * This file visualizes the most recently generated mask on an HTML canvas.
  * Used for debugging.
- * Need to call initRenderMaskOnCanvas() in index.js and uncomment canvas in index.html
+ * Need to call initRenderMaskOnCanvas() in index.js and uncomment mask canvas in index.html
  */
 
 import { createBinaryMask } from './binary-mask.js';
@@ -27,6 +27,8 @@ function renderMaskOnCanvas() {
     return;
   }
 
+  const georaster = selectedGeoTIFF.georasters[0];
+
   // Generate the binary mask
   const mask = createBinaryMask(selectedGeoTIFF, selectedShape);
 
@@ -39,8 +41,8 @@ function renderMaskOnCanvas() {
   const canvas = document.getElementById("maskCanvas");
   const ctx = canvas.getContext("2d");
 
-  const width = selectedGeoTIFF.width;
-  const height = selectedGeoTIFF.height;
+  const width = georaster.width;
+  const height = georaster.height;
 
   canvas.width = width;
   canvas.height = height;
