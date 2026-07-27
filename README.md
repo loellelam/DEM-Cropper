@@ -22,7 +22,7 @@ DEM Cropper is an open-source, browser-based application for generating 3D-print
 
 ## Demo
 
-Live demo is located at loellelam.github.io/DEM-Cropper/.
+Live demo is located at hicatlab.github.io/DEM-Cropper/.
 
 ## Getting Started
 
@@ -36,7 +36,7 @@ Before running the project, ensure the following software is installed:
 
 1. Clone the repo
     ```sh
-    git clone https://github.com/loellelam/DEM-Cropper.git
+    git clone https://github.com/hicatlab/DEM-Cropper.git
     ```
 2. Navigate to the project directory:
     ```sh
