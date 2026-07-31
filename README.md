@@ -66,4 +66,6 @@ Before running the project, ensure the following software is installed:
     python server.py
     ```
 3. Once both servers are running, open the frontend in your web browser (typically at http://localhost:5173).
-    
+
+---
+HiCAT Lab Members: Additional documentation is available in the HiCAT shared drive under the DEM folder.
